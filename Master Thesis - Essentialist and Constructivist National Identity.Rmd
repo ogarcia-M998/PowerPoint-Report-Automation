@@ -1,0 +1,3324 @@
+---
+title: "Master Thesis - ethnic and cultural national identity"
+author: "Oscar Garcia"
+date: "2024-03-10"
+output: html_document
+---
+Factor Analyses
+
+Summary: The following R.Markdown file takes upon the df_nationalism dataset generated in "Data cleaning and wrangling" and tries to execute Bayesian alignment optimization using MIE.
+
+It is recommended to move through the script using the Outline buttom in the upper right corner of the R.Studio script visualization window, which contains all tasks numerated and defined.
+In order to reset the source directory, it is recommended to use the Find/Replace tool from the upper toolbar, searching for "C:/Users/oscar/Documents/Projects/" and substituting for the adequate directory where the folder "Master Thesis - Oscar Garcia" is located
+  
+#1. Preparatory tasks
+
+##1.a) Reset space and charge libraries
+
+```{r, echo=FALSE}
+rm(list=ls()) # Clean workspace
+options(scipen=10000) # Set scientific notation
+options(future.globals.maxSize = +Inf) # Set globals maximum size to infinite (necessary for computational intense BSEM)
+library(tidyverse)
+library(factoextra) # For EFA
+library(lavaan) # For CFA
+library(semTools) # For measurement of invariance in MGCFA
+library(semPlot)
+library(gridExtra)
+#library(psych)
+#library(blavaan) # For Bayesian latent variable analysis (MG-BSEM)
+#library(sirt) # For alignment optimization
+#library(reshape2) # For pivoting tables of intercepts and loadings
+library(tidySEM)
+#library(lavaanPlot) # For CFA model plots (using graph_sem instead)
+library(stargazer) # For regression tables
+#library(mice) # For Multiple Imputation
+library(naniar) # For Little MCAR Test
+library(VIM) # For kNN (k Nearest Neighbours) imputation
+library(missRanger)
+set.seed(24042024) # For reproducibility of MI procedure
+
+```
+
+##1.b) Open dataset 
+The dataset can be retrieved in "https://cses.org/data-download/cses-module-5-2016-2021/" as a CSV.file. It was already wrangled with in a previous step.
+
+```{r}
+df_nationalism <- read.csv("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data/df_nationalism.csv", header = TRUE, sep = ",", encoding = "UTF-8")
+
+```
+
+##1.c) Prepare the data
+
+###1.c) 1.- Rename variables to improve clarity
+
+```{r}
+df_nationalism <- df_nationalism %>%
+  rename(birthplace = natidborncountr,
+         ancestry = natidancestry,
+         language = natidspeaklang,
+         customs = natidcusttrad)
+
+```
+
+###1.c) 1.- Recode variables of attitudes against immigrants
+
+```{r}
+# Impute average to _immig variables
+immig_vars <- c("econ_immig", "cult_immig", "sec_immig")
+
+df_nationalism <- df_nationalism %>%
+  mutate(econ_immig = 6 - econ_immig) %>%
+  mutate(cult_immig = 6 - cult_immig) %>%
+  mutate(sec_immig = 6 - sec_immig) %>%
+  mutate(ougrcusttrad = 6 - ougrcusttrad) %>%
+  mutate(ougrmajwill = 6 - ougrmajwill)
+```
+
+##1.d) Prepare country-years subset
+
+```{r}
+# Define your country list
+countrylist <- c(
+  "Czechia", "Germany", "Lithuania", "Netherlands", "New Zealand", "United States of America"
+  #, "Great Britain", "Greece"# Additional longitudinal observations that presented missing values
+  , "Iceland"
+  #, "Taiwan" # Additional longitudinal observations that presented missing values
+)
+
+# Filter the dataset
+df_longnat <- df_nationalism %>%
+  filter(countryname %in% countrylist)
+
+```
+
+###1.c) 1.- Delete observations with at least one parent born outside of [country] or the respondant born outside of country
+
+```{r}
+df_longnat <- df_longnat %>%
+  filter(countryname %in% c("Mexico", "Australia", "Japan", "Netherlands", "Norway", "South Korea", "Uruguay") & immigrant == 1 | (!(countryname %in% c("Mexico", "Australia", "Japan", "Netherlands", "Norway", "South Korea", "Uruguay") & parentforeign == 1)))
+
+```
+
+###1.c) 2.- Delete observations with missing values across any of the four observable variables/indicators
+
+```{r}
+# Delete missing cases 
+df_longnat <- df_longnat %>%
+  filter(complete.cases(birthplace, ancestry, language, customs
+                        #, econ_immig, cult_immig, sec_immig, ougrcusttrad, edulvl # Instead, impute values with the average value
+                        ))
+
+```
+
+##1.e) Create ordinal_variables vector to use to design the ordinal character of the variables tested & set labels for lavaanPlot
+
+```{r}
+ordinal_variables <- c("ancestry", "birthplace", "language", "customs")
+
+labelsSEM <- c(ancestry = "Ancestry", birthplace = "Birthplace", language = "Language", customs = "Customs and traditions", ethnic = "ethnic N.I.T.", cultural = "cultural N.I.T."#, econ_immig = "Belief: immigrants do not improve the economy", 
+               #cult_immig = "Belief: 
+                       #    immigrants 
+                        #  harm culture", 
+               #sec_immig = "Belief: 
+                         # immigrants 
+                          # increase 
+                           #criminality 
+                         #in the country"
+)
+
+labelsCFA <- c(ancestry = "Ancestry", birthplace = "Birthplace", language = "Language", customs = "Customs and traditions", ethnic = "ethnic N.I.T.", cultural = "cultural N.I.T.")
+
+```
+
+
+##1.f) Activate mgcfa_mitable function to simplify MG-CFA results assessment
+
+For using ordered
+```{r}
+#model <- cfamodel
+#data <- df_longnat
+#data$group <- data$countrynameyear
+mgcfa.ord_mitable <- function(data = data, ordered = TRUE, model = model, group = group) {
+  
+  # Check for configural equivalence and extract desired fit measures
+  config <- lavaan::cfa(model, ordered = TRUE, data = data, group = group)
+  fit_measures <- fitMeasures(config, c("chisq", "df", "cfi", "srmr", "rmsea"))
+  fit_measures_config <- as.matrix(t(fit_measures))  # Transpose to get fit measures as columns
+  rownames(fit_measures_config) <- "configural"  # Set the row name
+
+  # Check for metric equivalence and extract desired fit measures
+  metric <- lavaan::cfa(model, ordered = TRUE, data = data, group = group, group.equal="loadings") 
+  fit_measures <- fitMeasures(metric, c("chisq", "df", "cfi", "srmr", "rmsea"))
+  fit_measures_metric <- as.matrix(t(fit_measures))  # Transpose to get fit measures as columns
+  rownames(fit_measures_metric) <- "metric"  # Set the row name
+
+  # Check for scalar equivalence and extract desired fit measures
+  scalar <- lavaan::cfa(model, ordered = TRUE, data = data, group = group, group.equal = c("loadings", "intercepts", "thresholds")) 
+  fit_measures <- fitMeasures(scalar, c("chisq", "df", "cfi", "srmr", "rmsea"))
+  fit_measures_scalar <- as.matrix(t(fit_measures))  # Transpose to get fit measures as columns
+  rownames(fit_measures_scalar) <- "scalar"  # Set the row name
+  
+  # Check for strict equivalence and extract desired fit measures
+  means <- lavaan::cfa(model, data = data, ordered = TRUE, group = group, group.equal = c("loadings", "intercepts", "thresholds", "means")) 
+  fit_measures <- fitMeasures(means, c("chisq", "df", "cfi", "srmr", "rmsea"))
+  fit_measures_means <- as.matrix(t(fit_measures))  # Transpose to get fit measures as columns
+  rownames(fit_measures_means) <- "means"  # Set the row name
+  
+  # Bind all fit measures into a unique dataframe
+  fit_measures_all <- rbind(fit_measures_config, fit_measures_metric, fit_measures_scalar, fit_measures_means
+                            )
+  fit_measures_all <- as.data.frame(fit_measures_all)
+
+  # Calculate delta for all columns
+  for (col in names(fit_measures_all)) {
+   # Define delta_cols within the loop for current data
+   delta_cols <- grep("delta_", names(fit_measures_all), invert = FALSE)
+
+   # Create a vector with NA and all elements
+   delta_values <- c(NA, tail(fit_measures_all[, col], -1))
+   fit_measures_all[, paste0("delta_", col)] <- fit_measures_all[, col] - delta_values
+  } 
+   
+  indexname <- c("chisq", "df", "srmr", "rmsea")
+  deltaindex <- c("delta_chisq", "delta_df", "delta_srmr", "delta_rmsea")
+  
+  for (i in seq_along(indexname)) {
+    # Access elements from both vectors using the same index
+    name <- indexname[i]
+    delta_name <- deltaindex[i]
+    
+    #Calculate new value
+    # Select the value from name (column 5), row 1 (configural)
+    # Update delta_rmsea (column 7) for row 2 (metric)
+    fit_measures_all[2, delta_name] <- fit_measures_all[2, name] - fit_measures_all[1, name]
+
+    # Select the value from rmsea (column 5), row 2 (metric)
+    # Update delta_rmsea (column 7) for row 3 (scalar)
+    fit_measures_all[3, delta_name] <- fit_measures_all[3, name] - fit_measures_all[2, name]
+ 
+    # Select the value from rmsea (column 5), row 3 (scalar)
+    # Update delta_rmsea (column 7) for row 4 (strict)
+    fit_measures_all[4, delta_name] <- fit_measures_all[4, name] - fit_measures_all[3, name]
+    
+  } 
+  
+  # Update delta_cfi (column 7) for row 2 (metric)
+  fit_measures_all[2, "delta_cfi"] <- fit_measures_all[1, "cfi"] - fit_measures_all[2, "cfi"]
+
+  # Select the value from rmsea (column 5), row 2 (metric)
+  # Update delta_rmsea (column 7) for row 3 (scalar)
+  fit_measures_all[3, "delta_cfi"] <- fit_measures_all[2, "cfi"] - fit_measures_all[3, "cfi"]
+ 
+  # Update delta_rmsea (column 7) for row 4 (strict)
+  fit_measures_all[4, "delta_cfi"] <- fit_measures_all[3, "cfi"] - fit_measures_all[4, "cfi"]
+  
+  # Round all fit measures
+  fit_measures_2 <- round(fit_measures_all, digits = 4)  
+  
+  # Calculate p.value of chisq and delta_chisq
+  for (i in 1:4){
+    fit_measures_all[i, "p_chisq"] <- pchisq(fit_measures_all[i, "chisq"], fit_measures_all[i, "df"], lower.tail = FALSE)
+  }
+  for (i in 2:4){
+    fit_measures_all[i, "p_deltachisq"] <- pchisq(fit_measures_all[i, "delta_chisq"], fit_measures_all[i, "delta_df"], lower.tail = FALSE)
+  }
+  
+  # Merge p.value of chisq and delta_chisq with rounded dataframe
+  fit_measures <- cbind(fit_measures_2, fit_measures_all[, c("p_chisq", "p_deltachisq")])
+
+  # Add significance stars to chisq and delta_chisq
+  # Define symbol thresholds
+  thresholds <- c(0.001, 0.01, 0.05, 0.1, 1)
+
+  # Define symbols
+  symbols <- c("***", "**", "*", ".", "_")
+
+  for (i in 1:4){
+    # Get p-value
+    p_value <- fit_measures[i, "p_chisq"]
+    # Find the index of the first threshold greater than p-value
+    symbol_index <- which(p_value < thresholds, arr.ind = TRUE)[i]
+    # Extract the corresponding symbol
+    symbol <- symbols[symbol_index]
+    # Combine chisq value and symbol
+    fit_measures[i, "chisq"] <- paste(fit_measures[i, "chisq"], symbol, sep = " ")
+  }
+  
+  for (i in 2:4){
+    # Get p-value
+    p_value <- fit_measures[i, "p_deltachisq"]
+    # Find the index of the first threshold greater than p-value
+    symbol_index <- which(p_value < thresholds, arr.ind = TRUE)[i]
+    # Extract the corresponding symbol
+    symbol <- symbols[symbol_index]
+    # Combine chisq value and symbol
+    fit_measures[i, "delta_chisq"] <- paste(fit_measures[i, "delta_chisq"], symbol, sep = " ")
+  }
+  
+  # Add stars confirming Measurement Invariance
+  # Loop through each column of the subset
+  for (i in 1:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "rmsea"] < 0.06, 
+           fit_measures[i, "rmsea"] <- paste(fit_measures[i, "rmsea"], "*", sep=" "),   
+           fit_measures[i, "rmsea"])
+  }  
+
+  # Loop through each column of the subset
+  for (i in 2:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "delta_rmsea"] < 0.015, 
+           fit_measures[i, "delta_rmsea"] <- paste(fit_measures[i, "delta_rmsea"], "*", sep=" "),   
+           fit_measures[i, "delta_rmsea"])
+  }
+
+  # Loop through each column of the subset
+  for (i in 1:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "cfi"] > 0.95, 
+           fit_measures[i, "cfi"] <- paste(fit_measures[i, "cfi"], "*", sep=" "),   
+           fit_measures[i, "cfi"])
+  }
+  
+  # Loop through each column of the subset
+  for (i in 2:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "delta_cfi"] < 0.01, 
+           fit_measures[i, "delta_cfi"] <- paste(fit_measures[i, "delta_cfi"], "*", sep=" "),   
+           fit_measures[i, "delta_cfi"])
+  }
+  
+  # Loop through each column of the subset
+  for (i in 2:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "srmr"] < 0.08, 
+           fit_measures[i, "srmr"] <- paste(fit_measures[i, "srmr"], "*", sep=" "),   
+           fit_measures[i, "srmr"])
+  }
+  
+  ifelse(fit_measures[2, "delta_srmr"] < 0.03, 
+         fit_measures[2, "delta_srmr"] <- paste(fit_measures[2, "delta_srmr"], "*", sep=" "),
+         fit_measures[2, "delta_srmr"])
+  
+  for (i in 3:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "delta_srmr"] < 0.01, 
+           fit_measures[i, "delta_srmr"] <- paste(fit_measures[i, "delta_srmr"], "*", sep=" "),   
+           fit_measures[i, "delta_srmr"])
+  }
+
+  indexname <- c("chisq", "df", "srmr", "cfi","rmsea")
+  deltaindex <- c("delta_chisq", "delta_df", "delta_srmr", "delta_cfi", "delta_rmsea")
+  fit_measures_modified <- fit_measures
+
+  for (i in seq_along(indexname)) {
+    # Access elements from both vectors using the same index
+    name <- indexname[i]
+    delta_name <- deltaindex[i]
+    fit_measures_modified[2, name] <- paste(fit_measures[2, name], " (", fit_measures[2, delta_name], ")", sep = "")
+    fit_measures_modified[3, name] <- paste(fit_measures[3, name], " (", fit_measures[3, delta_name], ")", sep = "")
+    fit_measures_modified[4, name] <- paste(fit_measures[4, name], " (", fit_measures[4, delta_name], ")", sep = "")
+  }
+
+  MGCFA_MITab <- fit_measures_modified[, c(1, 3, 4, 5)]
+
+  print(MGCFA_MITab)
+}
+```
+
+For not using ordered
+```{r}
+#model <- cfamodel
+#data <- df_longnat
+#data$group <- data$countrynameyear
+mgcfa_mitable <- function(data = data, model = model, group = group) {
+  
+  # Check for configural equivalence and extract desired fit measures
+  config <- lavaan::cfa(model, data = data, group = group)
+  fit_measures <- fitMeasures(config, c("chisq", "df", "cfi", "srmr", "rmsea"))
+  fit_measures_config <- as.matrix(t(fit_measures))  # Transpose to get fit measures as columns
+  rownames(fit_measures_config) <- "configural"  # Set the row name
+
+  # Check for metric equivalence and extract desired fit measures
+  metric <- lavaan::cfa(model, data = data, group = group, group.equal="loadings") 
+  fit_measures <- fitMeasures(metric, c("chisq", "df", "cfi", "srmr", "rmsea"))
+  fit_measures_metric <- as.matrix(t(fit_measures))  # Transpose to get fit measures as columns
+  rownames(fit_measures_metric) <- "metric"  # Set the row name
+
+  # Check for scalar equivalence and extract desired fit measures
+  scalar <- lavaan::cfa(model, data = data, group = group, group.equal = c("loadings", "intercepts")) 
+  fit_measures <- fitMeasures(scalar, c("chisq", "df", "cfi", "srmr", "rmsea"))
+  fit_measures_scalar <- as.matrix(t(fit_measures))  # Transpose to get fit measures as columns
+  rownames(fit_measures_scalar) <- "scalar"  # Set the row name
+
+  # Check for strict equivalence and extract desired fit measures
+  strict <- lavaan::cfa(model, data = data, group = group, group.equal = c("loadings", "intercepts", "residuals")) 
+  fit_measures <- fitMeasures(strict, c("chisq", "df", "cfi", "srmr", "rmsea"))
+  fit_measures_strict <- as.matrix(t(fit_measures))  # Transpose to get fit measures as columns
+  rownames(fit_measures_strict) <- "strict"  # Set the row name
+  
+  # Bind all fit measures into a unique dataframe
+  fit_measures_all <- rbind(fit_measures_config, fit_measures_metric, fit_measures_scalar, fit_measures_strict)
+  fit_measures_all <- as.data.frame(fit_measures_all)
+
+  # Calculate delta for all columns
+  for (col in names(fit_measures_all)) {
+   # Define delta_cols within the loop for current data
+   delta_cols <- grep("delta_", names(fit_measures_all), invert = FALSE)
+
+   # Create a vector with NA and all elements
+   delta_values <- c(NA, tail(fit_measures_all[, col], -1))
+   fit_measures_all[, paste0("delta_", col)] <- fit_measures_all[, col] - delta_values
+  } 
+   
+  indexname <- c("chisq", "df", "srmr", "rmsea")
+  deltaindex <- c("delta_chisq", "delta_df", "delta_srmr", "delta_rmsea")
+  
+  for (i in seq_along(indexname)) {
+    # Access elements from both vectors using the same index
+    name <- indexname[i]
+    delta_name <- deltaindex[i]
+    
+    #Calculate new value
+    # Select the value from name (column 5), row 1 (configural)
+    # Update delta_rmsea (column 7) for row 2 (metric)
+    fit_measures_all[2, delta_name] <- fit_measures_all[2, name] - fit_measures_all[1, name]
+
+    # Select the value from rmsea (column 5), row 2 (metric)
+    # Update delta_rmsea (column 7) for row 3 (scalar)
+    fit_measures_all[3, delta_name] <- fit_measures_all[3, name] - fit_measures_all[2, name]
+ 
+    # Select the value from rmsea (column 5), row 3 (scalar)
+    # Update delta_rmsea (column 7) for row 4 (strict)
+    fit_measures_all[4, delta_name] <- fit_measures_all[4, name] - fit_measures_all[3, name]
+    
+  } 
+  
+  # Update delta_cfi (column 7) for row 2 (metric)
+  fit_measures_all[2, "delta_cfi"] <- fit_measures_all[1, "cfi"] - fit_measures_all[2, "cfi"]
+
+  # Select the value from rmsea (column 5), row 2 (metric)
+  # Update delta_rmsea (column 7) for row 3 (scalar)
+  fit_measures_all[3, "delta_cfi"] <- fit_measures_all[2, "cfi"] - fit_measures_all[3, "cfi"]
+ 
+  # Update delta_rmsea (column 7) for row 4 (strict)
+  fit_measures_all[4, "delta_cfi"] <- fit_measures_all[3, "cfi"] - fit_measures_all[4, "cfi"]
+  
+  # Round all fit measures
+  fit_measures_2 <- round(fit_measures_all, digits = 4)  
+  
+  # Calculate p.value of chisq and delta_chisq
+  for (i in 1:4){
+    fit_measures_all[i, "p_chisq"] <- pchisq(fit_measures_all[i, "chisq"], fit_measures_all[i, "df"], lower.tail = FALSE)
+  }
+  for (i in 2:4){
+    fit_measures_all[i, "p_deltachisq"] <- pchisq(fit_measures_all[i, "delta_chisq"], fit_measures_all[i, "delta_df"], lower.tail = FALSE)
+  }
+  
+  # Merge p.value of chisq and delta_chisq with rounded dataframe
+  fit_measures <- cbind(fit_measures_2, fit_measures_all[, c("p_chisq", "p_deltachisq")])
+
+  # Add significance stars to chisq and delta_chisq
+  # Define symbol thresholds
+  thresholds <- c(0.001, 0.01, 0.05, 0.1, 1)
+
+  # Define symbols
+  symbols <- c("***", "**", "*", ".", "_")
+
+  for (i in 1:4){
+    # Get p-value
+    p_value <- fit_measures[i, "p_chisq"]
+    # Find the index of the first threshold greater than p-value
+    symbol_index <- which(p_value < thresholds, arr.ind = TRUE)[i]
+    # Extract the corresponding symbol
+    symbol <- symbols[symbol_index]
+    # Combine chisq value and symbol
+    fit_measures[i, "chisq"] <- paste(fit_measures[i, "chisq"], symbol, sep = " ")
+  }
+  
+  for (i in 2:4){
+    # Get p-value
+    p_value <- fit_measures[i, "p_deltachisq"]
+    # Find the index of the first threshold greater than p-value
+    symbol_index <- which(p_value < thresholds, arr.ind = TRUE)[i]
+    # Extract the corresponding symbol
+    symbol <- symbols[symbol_index]
+    # Combine chisq value and symbol
+    fit_measures[i, "delta_chisq"] <- paste(fit_measures[i, "delta_chisq"], symbol, sep = " ")
+  }
+  
+  # Add stars confirming Measurement Invariance
+  # Loop through each column of the subset
+  for (i in 1:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "rmsea"] < 0.06, 
+           fit_measures[i, "rmsea"] <- paste(fit_measures[i, "rmsea"], "*", sep=" "),   
+           fit_measures[i, "rmsea"])
+  }  
+
+  # Loop through each column of the subset
+  for (i in 2:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "delta_rmsea"] < 0.015, 
+           fit_measures[i, "delta_rmsea"] <- paste(fit_measures[i, "delta_rmsea"], "*", sep=" "),   
+           fit_measures[i, "delta_rmsea"])
+  }
+
+  # Loop through each column of the subset
+  for (i in 1:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "cfi"] > 0.95, 
+           fit_measures[i, "cfi"] <- paste(fit_measures[i, "cfi"], "*", sep=" "),   
+           fit_measures[i, "cfi"])
+  }
+  
+  # Loop through each column of the subset
+  for (i in 2:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "delta_cfi"] < 0.01, 
+           fit_measures[i, "delta_cfi"] <- paste(fit_measures[i, "delta_cfi"], "*", sep=" "),   
+           fit_measures[i, "delta_cfi"])
+  }
+  
+  # Loop through each column of the subset
+  for (i in 2:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "srmr"] < 0.08, 
+           fit_measures[i, "srmr"] <- paste(fit_measures[i, "srmr"], "*", sep=" "),   
+           fit_measures[i, "srmr"])
+  }
+  
+  ifelse(fit_measures[2, "delta_srmr"] < 0.03, 
+         fit_measures[2, "delta_srmr"] <- paste(fit_measures[2, "delta_srmr"], "*", sep=" "),
+         fit_measures[2, "delta_srmr"])
+  
+  for (i in 3:4) {
+    # Check the criteria and add symbol
+    ifelse(fit_measures[i, "delta_srmr"] < 0.01, 
+           fit_measures[i, "delta_srmr"] <- paste(fit_measures[i, "delta_srmr"], "*", sep=" "),   
+           fit_measures[i, "delta_srmr"])
+  }
+
+  indexname <- c("chisq", "df", "srmr", "cfi","rmsea")
+  deltaindex <- c("delta_chisq", "delta_df", "delta_srmr", "delta_cfi", "delta_rmsea")
+  fit_measures_modified <- fit_measures
+
+  for (i in seq_along(indexname)) {
+    # Access elements from both vectors using the same index
+    name <- indexname[i]
+    delta_name <- deltaindex[i]
+    fit_measures_modified[2, name] <- paste(fit_measures[2, name], " (", fit_measures[2, delta_name], ")", sep = "")
+    fit_measures_modified[3, name] <- paste(fit_measures[3, name], " (", fit_measures[3, delta_name], ")", sep = "")
+    fit_measures_modified[4, name] <- paste(fit_measures[4, name], " (", fit_measures[4, delta_name], ")", sep = "")
+  }
+
+  MGCFA_MITab <- fit_measures_modified[, c(1, 3, 4, 5)]
+
+  print(MGCFA_MITab)
+}
+```
+
+
+##1.g) Create descriptive statistics table of groups
+
+```{r}
+# Define group vector
+groups <- c("Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", 
+            "Lithuania_2016", "Lithuania_2020", "Netherlands_2017", "Netherlands_2021", 
+            "New Zealand_2017", "New Zealand_2020", "United States of America_2016", "United States of America_2020"
+            #, "Great Britain_2017", "Great Britain_2019", "Greece_2015", "Greece_2019"
+            , "Iceland_2016", "Iceland_2017"
+            #, "Taiwan_2016", "Taiwan_2020"
+            )
+
+# Summarize data by group
+summary_by_group <- df_longnat %>%
+  # Filter by groups defined in the vector
+  filter(countrynameyear %in% groups) %>%
+  # Group by country and year
+  group_by(countrynameyear) %>%
+  # Summarize with desired statistics, handling NAs with na.rm=TRUE
+  summarise(
+    N = n(),  # Count observations (number of individuals)
+    Mean_Age = round(mean(age, na.rm = TRUE), digits = 2),  # Mean age (ignoring NAs)
+    SD_Age = round(sd(age, na.rm = TRUE), digits = 2),  # Standard deviation of age (ignoring NAs)
+    Pct_Female = round(mean(gender == 1, na.rm = TRUE), digits = 4) * 100  # Percent female (ignoring NAs)
+  )
+
+# Print the summary table
+print(summary_by_group)
+
+# Summarize data by group
+summary_total <- df_longnat %>%
+  # Summarize with desired statistics, handling NAs with na.rm=TRUE
+  summarise(
+    N = n(),  # Count observations (number of individuals)
+    Mean_Age = round(mean(age, na.rm = TRUE), digits = 2),  # Mean age (ignoring NAs)
+    SD_Age = round(sd(age, na.rm = TRUE), digits = 2),  # Standard deviation of age (ignoring NAs)
+    Pct_Female = round(mean(gender == 1, na.rm = TRUE), digits = 4) * 100  # Percent female (ignoring NAs)
+  )
+
+# Print the summary table
+print(summary_total)
+
+```
+
+##1.h) NAs procedure
+
+###1.h) 1.- Count NAs per variable and average NAs
+
+```{r}
+# Count missing values for each variable
+missing_counts <- sapply(df_longnat[, c("econ_immig", "cult_immig", "sec_immig", "ougrcusttrad", "edulvl")], function(x) sum(is.na(x)))
+ 
+# Calculate average number of NAs
+average_na <- mean(missing_counts)
+ 
+# Print results
+cat("Missing value counts for each variable:\n")
+
+print(c(missing_counts, average_na))
+
+```
+
+###1.h) 2.- Test MCAR between NAs in associated vars and national identity measures
+
+```{r}
+groups <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Iceland_2016", "Iceland_2017", "Lithuania_2016", "Lithuania_2020", "New Zealand_2017", "New Zealand_2020", "Netherlands_2017", "Netherlands_2021", "United States of America_2016", "United States of America_2020"
+)
+
+# Testing MCAR across each group
+for (group in groups) {
+  df <- df_longnat %>%
+    filter(countrynameyear == {{group}}) %>%
+    mutate(
+      birthplace = factor(birthplace),
+      ancestry = factor(ancestry),
+      language = factor(language),
+      customs = factor(customs),
+      econ_immig = factor(econ_immig),
+      cult_immig = factor(cult_immig),
+      sec_immig = factor(sec_immig),
+      ougrcusttrad = factor(ougrcusttrad),
+      edulvl = factor(edulvl)
+    ) %>%
+    select(c(birthplace, ancestry, language, customs, econ_immig, cult_immig, sec_immig, ougrcusttrad, edulvl))
+  
+  print(mcar_test(df))
+}
+# Only in 5 of 14 groups is MCAR confirmed
+
+# Testing MCAR for whole sample
+df <- df_longnat %>%
+  mutate(
+    birthplace = factor(birthplace),
+    ancestry = factor(ancestry),
+    language = factor(language),
+    customs = factor(customs),
+    econ_immig = factor(econ_immig),
+    cult_immig = factor(cult_immig),
+    sec_immig = factor(sec_immig),
+    ougrcusttrad = factor(ougrcusttrad),
+    edulvl = factor(edulvl)
+  ) %>%
+  select(c(birthplace, ancestry, language, customs, econ_immig, cult_immig, sec_immig, ougrcusttrad, edulvl, countryname, electionyear, countrynameyear))
+  
+print(mcar_test(df))
+
+```
+
+###1.h) 3.- Imputation with kNN
+
+```{r eval=FALSE, include=FALSE}
+df_kNNimp <- kNN(df, k = 10)
+
+```
+
+###1.h) 4.- Imputation with missRanger
+
+```{r}
+df_longnat <- missRanger(
+  df, 
+  pmm.k = 3, 
+  splitrule = "extratrees", 
+  num.trees = 50, 
+  verbose = 0
+)
+```
+
+##1.h) 5.- Count NAs per variable and average NAs
+
+```{r}
+# Count missing values for each variable
+missing_counts <- sapply(df_longnat[, c("econ_immig", "cult_immig", "sec_immig", "ougrcusttrad", "edulvl")], function(x) sum(is.na(x)))
+ 
+# Calculate average number of NAs
+average_na <- mean(missing_counts)
+ 
+# Print results
+cat("Missing value counts for each variable:\n")
+
+print(c(missing_counts, average_na))
+
+```
+
+#2. CFA analysis
+
+##2.a) Two-factor model
+
+###2.a) 1.- Model specification
+Crossloadings are not modelled to avoid miss-identification
+
+```{r}
+cfamodel <- '
+  # Observed indicators of the latent variables
+  ethnic =~ ancestry + birthplace
+  cultural =~ language + customs
+'
+```
+
+###2.a) 2.- CFA model
+
+```{r}
+cfa_modelfit <- lavaan::cfa(cfamodel, ordered = ordinal_variables, data = df_longnat, std.lv = TRUE)
+summary(cfa_modelfit)
+fitmeasures(cfa_modelfit, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+
+# Calculate reliability including CR
+compRelSEM(cfa_modelfit, ord.scale = TRUE)
+
+modificationIndices(cfa_modelfit, standardized = TRUE, cov.std = TRUE,
+                    information = "expected",
+                    power = FALSE, delta = 0.1, alpha = 0.05,
+                    high.power = 0.75, sort. = FALSE, minimum.value = 0, 
+                    free.remove = TRUE,
+                    na.remove = TRUE, op = NULL)%>%
+                    as.data.frame() %>%
+                    arrange(-mi) %>%
+                    filter(mi > 0) %>%
+                    select(lhs, op, rhs, mi, epc)
+
+### Discriminant validity
+## 1. Confidence Intervals for Inter-Construct Correlations: if no CI includes 1, good
+# Get the estimated covariances between latent variables
+parameterEstimates(cfa_modelfit, ci = TRUE, level = 0.90,
+                   boot.ci.type = "perc", standardized = T)
+
+##3. Fornell-Larcker Criterion:  If VE for a construct is lower than the squared correlation with another construct, it might indicate a lack of discriminant validity for that specific pair
+
+source("https://raw.githubusercontent.com/franciscowilhelm/r-collection/master/forn_larcker_test.R")
+
+Fornlacker_test <- forn_larcker_test(cfa_modelfit, x = c("ethnic"), y = c("cultural"))
+
+print(Fornlacker_test)
+
+```
+
+
+###2.a) 3.- CFA model for each group
+
+```{r}
+groups <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Iceland_2016", "Iceland_2017", "Lithuania_2016", "Lithuania_2020", "New Zealand_2017", "New Zealand_2020", "Netherlands_2017", "Netherlands_2021", "United States of America_2016", "United States of America_2020"
+)
+
+for (group in groups) {
+  df <- df_longnat %>%
+    filter(countrynameyear == {{group}}) 
+  
+  cfa_modelfit <- lavaan::cfa(cfamodel, ordered = ordinal_variables, data = df, std.lv = TRUE)
+  
+  cat(group) 
+
+  print(summary(cfa_modelfit))
+  
+  print(fitmeasures(cfa_modelfit, c("chisq", "cfi", "rmsea", "srmr")))
+
+  # Calculate reliability including CR
+
+  #reliabilities <- semTools::reliability(cfa_modelfit)
+  #print(reliabilities)
+
+  #print(compRelSEM(cfa_modelfit, ord.scale = TRUE))
+
+  #modificationIndices(cfa_modelfit, standardized = TRUE, cov.std = TRUE,
+   #                 information = "expected",
+    #                power = FALSE, delta = 0.1, alpha = 0.05,
+     #               high.power = 0.75, sort. = FALSE, minimum.value = 0, 
+      #              free.remove = TRUE,
+       #             na.remove = TRUE, op = NULL)%>%
+        #            as.data.frame() %>%
+         #           arrange(-mi) %>%
+          #          filter(mi > 0) %>%
+           #         select(lhs, op, rhs, mi, epc)
+
+  ### Discriminant validity
+  ## 1. Confidence Intervals for Inter-Construct Correlations: if no CI includes 1, good
+  # Get the estimated covariances between latent variables
+  #all_estimates <- parameterEstimates(cfa_modelfit, ci = TRUE, level = 0.90,
+   #                boot.ci.type = "perc", standardized = T)
+  #ethnic_cultural_estimate <- all_estimates[grepl("~~", all_estimates$op), ]
+  #print(ethnic_cultural_estimate)
+
+  ##3. Fornell-Larcker Criterion:  If VE for a construct is lower than the squared correlation with another construct, it might indicate a lack of discriminant validity for that specific pair
+
+  #source("https://raw.githubusercontent.com/franciscowilhelm/r-collection/master/forn_larcker_test.R")
+
+  #Fornlacker_test <- forn_larcker_test(cfa_modelfit, x = c("ethnic"), y = c("cultural"))
+
+  #print(Fornlacker_test)
+            
+}
+```
+
+
+##2.b) One-factor CFA models for contrast
+
+###2.b) 1.- Model specfication
+
+```{r}
+cfa1facmodel <- '
+  # Observed indicators of the latent variables
+  nationalid =~ ancestry + birthplace + language + customs
+'
+```
+
+###2.b) 2.- One-factor CFA model
+
+```{r}
+cfa1fac_modelfit <- lavaan::cfa(cfa1facmodel, ordered = ordinal_variables, data = df_longnat, std.lv = TRUE)
+summary(cfa1fac_modelfit)
+fitmeasures(cfa1fac_modelfit, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+
+# Calculate reliability including CR
+reliabilities <- semTools::reliability(cfa1fac_modelfit)
+print(reliabilities)
+
+compRelSEM(cfa1fac_modelfit, ord.scale = TRUE)
+
+modificationIndices(cfa1fac_modelfit, standardized = TRUE, cov.std = TRUE,
+                    information = "expected",
+                    power = FALSE, delta = 0.1, alpha = 0.05,
+                    high.power = 0.75, sort. = FALSE, minimum.value = 0, 
+                    free.remove = TRUE,
+                    na.remove = TRUE, op = NULL)%>%
+  as.data.frame() %>%
+  arrange(-mi) %>%
+  filter(mi > 0) %>%
+  select(lhs, op, rhs, mi, epc)
+
+```
+
+After fitting both models, we observe that the two factor model presents a better overall fit than the one factor model: chisq = 0.146, p.value(chisq) = 0.703 (standard) 0.432 (scaled), cfi = 1.000, rmsea = 0.000 [0.000-0.011], srmr = 0.001, vs. chisq = 3050.806, p.value(chisq) = 0.000, cfi = 0.982, rmsea = 0.219 [0.213-0.226], srmr = 0.085.
+
+###2.b) 3.- One-factor group-level CFA
+
+```{r}
+groups <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Iceland_2016", "Iceland_2017", "Lithuania_2016", "Lithuania_2020", "New Zealand_2017", "New Zealand_2020", "Netherlands_2017", "Netherlands_2021", "United States of America_2016", "United States of America_2020"
+)
+
+for (group in groups) {
+  df <- df_longnat %>%
+    filter(countrynameyear == {{group}}) 
+  
+  cfa_modelfit <- lavaan::cfa(cfa1facmodel, ordered = TRUE, data = df, std.lv = TRUE)
+  
+  #print(summary(cfa_modelfit))
+  
+  print(fitmeasures(cfa_modelfit, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr")))
+
+  # Calculate reliability including CR
+
+  print(compRelSEM(cfa_modelfit, ord.scale = TRUE))
+
+  #modificationIndices(cfa_modelfit, standardized = TRUE, cov.std = TRUE,
+   #                 information = "expected",
+    #                power = FALSE, delta = 0.1, alpha = 0.05,
+     #               high.power = 0.75, sort. = FALSE, minimum.value = 0, 
+      #              free.remove = TRUE,
+       #             na.remove = TRUE, op = NULL)%>%
+        #            as.data.frame() %>%
+         ##           arrange(-mi) %>%
+           #         filter(mi > 0) %>%
+            #        select(lhs, op, rhs, mi, epc)
+
+  ### Discriminant validity: not applicable in a one-factor model
+            
+}
+```
+
+
+#3. SEM models 
+
+##3.a) SEM model for all samples
+
+```{r}
+semModel <- '
+  # Measurement model (same as cfamodel)
+  ethnic =~ ancestry + birthplace 
+  cultural =~ language + customs
+
+  # Structural model
+  # ethnic and cultural as predictors
+  econ_immig ~ ethnic + cultural
+  sec_immig ~ ethnic + cultural
+  cult_immig ~ ethnic + cultural
+  ougrcusttrad ~ ethnic + cultural
+  
+  # National identity types as predicted
+  #ethnic + cultural ~ edulvl
+  #ethnic + cultural ~ quintinc
+'
+# Expected relation between latent variables and perceived effect of immigration (perc_immig_effect) can only be observed when setting crossloadings, but this generates miss-identification
+# Perform SEM analysis
+semFit <- lavaan::sem(semModel, ordered = TRUE, data = df_longnat, std.lv = TRUE, parameterization = "theta")
+
+summary(semFit)
+
+fitMeasures(semFit, c("chisq", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi"))
+
+#compRelSEM(semFit, ord.scale = ordinal_variables)
+
+#modificationIndices(semFit, standardized = TRUE, cov.std = TRUE,
+ #                   information = "expected",
+  #                  power = FALSE, delta = 0.1, alpha = 0.05,
+   #                 high.power = 0.75, sort. = FALSE, minimum.value = 0, 
+    #                free.remove = TRUE,
+     #               na.remove = TRUE, op = NULL)%>%
+      #              as.data.frame() %>%
+       #             arrange(-mi) %>%
+        #            filter(mi > 4) %>%
+         #           select(lhs, op, rhs, mi, epc)
+
+edges <- get_edges(semFit)
+filtered_edges <- edges %>%
+  filter(!row_number() %in% 13:29)
+
+lay <- get_layout("ancestry", "","birthplace", "language","", "customs",
+                  "", "ethnic", "","", "cultural", "",
+                  "econ_immig", "", "cult_immig", "sec_immig", "", "ougrcusttrad", rows = 3)
+
+graph_sem(semFit, layout = lay,
+          edges = filtered_edges,
+          rect_width = 1.8,
+          rect_height = 0.8,
+          ellipses_width = 1.2,
+          ellipses_height = 1.2,
+          variance_diameter = 0)
+
+#lavaanPlot(model = semFit, 
+ #          coefs = TRUE,
+  #         covs = FALSE,
+   #        stand = TRUE,
+    #       edge_options = list(color ='grey'), 
+     #      sig = .05,
+      #     labels = labelsSEM) # https://cran.r-project.org/web/packages/lavaanPlot/vignettes/Intro_to_lavaanPlot.html for more infor on options
+```
+
+##3.c) SEM model for each group
+
+```{r}
+groups <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Iceland_2016", "Iceland_2017", "Lithuania_2016", "Lithuania_2020", "New Zealand_2017", "New Zealand_2020", "Netherlands_2017", "Netherlands_2021", "United States of America_2016", "United States of America_2020"
+)
+
+for (group in groups) {
+  df <- df_longnat %>%
+    filter(countrynameyear == {{group}})
+  
+  fit <- sem(model = semModel, ordered = TRUE, data = df, std.lv = TRUE)
+  
+  #print(summary(fit))
+  
+  #print(fitMeasures(fit, c("chisq", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi")))
+  
+  # Calculate reliability including CR
+
+  #print(compRelSEM(fit, ord.scale = TRUE))
+
+  ### Discriminant validity
+  ## 1. Confidence Intervals for Inter-Construct Correlations: if no CI includes 1, good
+  # Get the estimated covariances between latent variables
+  all_estimates <- parameterEstimates(fit, ci = TRUE, level = 0.90,
+                   boot.ci.type = "perc", standardized = T)
+  ethnic_cultural_estimate <- all_estimates[grepl("~~", all_estimates$op), ]
+  print(ethnic_cultural_estimate)
+
+  ##3. Fornell-Larcker Criterion:  If VE for a construct is lower than the squared correlation with another construct, it might indicate a lack of discriminant validity for that specific pair
+
+  #source("https://raw.githubusercontent.com/franciscowilhelm/r-collection/master/forn_larcker_test.R")
+
+  #Fornlacker_test <- forn_larcker_test(fit, x = c("ethnic"), y = c("cultural"))
+
+  #print(Fornlacker_test)
+  
+  print(AVE(fit))
+  
+  print(lavInspect(fit, what = "cor.lv")^2)
+  
+  # Generate SEM graphs
+  edges <- get_edges(fit)
+  filtered_edges <- edges %>%
+    filter(!row_number() %in% 13:29)
+  
+  lay <- get_layout("ancestry", "","birthplace", "language","", "customs",
+                    "", "ethnic", "","", "cultural", "",
+                    "econ_immig", "", "cult_immig", "sec_immig", "", "ougrcusttrad", rows = 3)
+  
+  g <- graph_sem(fit, layout = lay,
+                  edges = filtered_edges,
+                  rect_width = 1.8,
+                  rect_height = 0.8,
+                  ellipses_width = 1.2,
+                  ellipses_height = 1.2)
+  
+  g <- grid.arrange(g, top = group)
+  
+  ggsave(paste('C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/SEMgraphs/', group, 'SEM.png'), g)
+  
+}  
+```
+
+
+#4. Multigroup analyses
+
+##4.a) Multi-group CFA 
+
+```{r}
+semTools::measurementInvariance(model = cfamodel, ordered = ordinal_variables, data = df_longnat, group = "countrynameyear", fit.measures = c("chisq", "df", "cfi", "srmr", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper"))
+
+mgcfa.ord_mitable(model = cfamodel, ordered = TRUE, data = df_longnat, group = "countrynameyear")
+
+mgcfa_scalarfit <- cfa(cfamodel, ordered = TRUE, data = df_longnat, group = "countrynameyear", group.equal = c("loadings", "thresholds", "intercepts"), std.lv = TRUE, parameterization = "theta")
+
+summary(mgcfa_scalarfit, ci = TRUE)
+
+fitMeasures(mgcfa_scalarfit, c("chisq", "df", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi"))
+
+lavInspect(mgcfa_scalarfit, "est")$`New Zealand_2017`$theta
+lavInspect(mgcfa_scalarfit, "est")
+
+parameterEstimates(mgcfa_scalarfit)
+
+```
+With delta parameterization, New Zealand 2017 has one negative ov variance. Therefore, we try with theta parameterization
+
+###4.a) 1.- Theta MG-CFA
+
+```{r}
+#mgcfa_configuralfit_theta <- cfa(cfamodel, ordered = TRUE, data = df_longnat, group = "countrynameyear", std.lv = TRUE, parameterization = "theta")
+
+mgcfa_metricfit_theta <- cfa(cfamodel, ordered = TRUE, data = df_longnat, group = "countrynameyear", group.equal = c("loadings"), std.lv = TRUE, parameterization = "theta")
+
+mgcfa_scalarfit_theta <- cfa(cfamodel, ordered = TRUE, data = df_longnat, group = "countrynameyear", group.equal = c("loadings", "thresholds", "intercepts"), std.lv = TRUE, parameterization = "theta")
+
+```
+
+
+
+###4.a) 1.- Testing for significance of negative residual variance of New Zealand in 2017
+Fitting model with freely estimated residual variances
+
+```{r}
+mgcfamodel <- '
+  # Observed indicators of the latent variables
+  ethnic =~ ancestry + birthplace
+  cultural =~ language + customs
+  
+  ancestry ~~ c(1, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA) * ancestry
+'
+mgcfa_scalarfit1 <- cfa(mgcfamodel, ordered = TRUE, data = df_longnat, group = "countrynameyear", group.equal = c("loadings", "thresholds", "intercepts"), std.lv = TRUE, parameterization = "theta")
+
+#lavInspect(mgcfa_scalarfit1, "est")
+```
+
+
+Fitting model with residual variance constrained to 0
+```{r}
+mgcfamodel <- '
+  # Observed indicators of the latent variables
+  ethnic =~ ancestry + birthplace
+  cultural =~ language + customs
+  
+  ancestry ~~ c(1, NA, NA, NA, NA, NA, NA, NA, NA, NA, g11, NA, NA, NA) * ancestry
+  g11 == 0.1
+'
+mgcfa_scalarfit2 <- cfa(mgcfamodel, ordered = TRUE, data = df_longnat, group = "countrynameyear", group.equal = c("loadings", "thresholds", "intercepts"), std.lv = TRUE, parameterization = "theta")
+
+#summary(mgcfa_scalarfit2, ci = TRUE)
+
+#lavInspect(mgcfa_scalarfit2, "est")
+#fitMeasures(mgcfa_scalarfit2, c("chisq", "df", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi"))
+#parameterEstimates(mgcfa_scalarfit2)
+
+```
+
+Testing significance of the difference
+```{r}
+
+fitMeasures(mgcfa_scalarfit1, c("chisq", "df", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi"))
+fitMeasures(mgcfa_scalarfit2, c("chisq", "df", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi"))
+
+anova(mgcfa_scalarfit1, mgcfa_scalarfit2)
+
+lavTestLRT(mgcfa_scalarfit1, mgcfa_scalarfit2, A.method = "delta")
+
+lavTestLRT(mgcfa_scalarfit1, mgcfa_scalarfit2, method="satorra.bentler.2010")
+
+lavTestLRT(mgcfa_scalarfit, mgcfa_scalarfit2, method="satorra.bentler.2010")
+
+pchisq(3.9587, 1)
+
+#lavTestWald(mgcfa_scalarfit1, constraints = "g11 == 0")
+
+# Interpret the p-value: 
+#  - p > 0.05: Suggests non-significant negative variance
+#  - p < 0.05: Suggests significant negative variance
+```
+
+###4.a) 1.- Testing for significance of excessive interconstruct correlation of USA
+Fitting model with freely estimated residual variances
+
+```{r}
+df_longnat_red <- df_longnat %>%
+  filter(countryname != "New Zealand")
+
+mgcfamodel <- '
+  # Observed indicators of the latent variables
+  ethnic =~ ancestry + birthplace
+  cultural =~ language + customs
+'
+mgcfa_scalarfit1 <- cfa(mgcfamodel, ordered = TRUE, data = df_longnat_red, group = "countrynameyear", group.equal = c("loadings", "thresholds", "intercepts"), std.lv = TRUE, parameterization = "delta")
+#summary(mgcfa_scalarfit1)
+#lavInspect(mgcfa_scalarfit1, "est")
+
+CI95_intercons <- parameterEstimates(mgcfa_scalarfit1, ci = TRUE, level = 0.90,
+                   boot.ci.type = "perc", standardized = T)
+CI95_intercons <- CI95_intercons %>%
+  filter(lhs == "ethnic") %>%
+  filter(rhs == "cultural") %>%
+  select(c("group", "est", "se", "z", "pvalue", "ci.lower", "ci.upper")) %>%
+  print()
+
+resid(mgcfa_scalarfit1, type = "cor")
+```
+
+
+Fitting model with residual variance constrained to 0
+```{r}
+mgcfamodel <- '
+  # Observed indicators of the latent variables
+  ethnic =~ ancestry + birthplace
+  cultural =~ language + customs
+  
+  ethnic ~~ c(NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, 0.95, 0.95) * cultural
+  #ethnic ~~ c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.95, 0.95) * cultural
+
+  #g11 <= 1
+  #g12 <= 1
+'
+mgcfa_scalarfit2 <- cfa(mgcfamodel, ordered = TRUE, data = df_longnat_red, group = "countrynameyear", group.equal = c("loadings", "thresholds", "intercepts"), std.lv = TRUE, parameterization = "delta")
+summary(mgcfa_scalarfit2)
+lavInspect(mgcfa_scalarfit2, "est")
+
+CI95_intercons <- parameterEstimates(mgcfa_scalarfit2, ci = TRUE, level = 0.90,
+                   boot.ci.type = "perc", standardized = T)
+CI95_intercons <- CI95_intercons %>%
+  filter(lhs == "ethnic") %>%
+  filter(rhs == "cultural") %>%
+  select(c("group", "est", "se", "z", "pvalue", "ci.lower", "ci.upper")) %>%
+  print()
+
+```
+
+Testing significance of the difference
+```{r}
+
+fitMeasures(mgcfa_scalarfit1, c("chisq", "df", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi"))
+fitMeasures(mgcfa_scalarfit2, c("chisq", "df", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi"))
+
+anova(mgcfa_scalarfit1, mgcfa_scalarfit2)
+
+lavTestLRT(mgcfa_scalarfit1, mgcfa_scalarfit2, A.method = "delta")
+
+lavTestLRT(mgcfa_scalarfit1, mgcfa_scalarfit2, method="satorra.2000")
+
+lavTestLRT(mgcfa_scalarfit1, mgcfa_scalarfit2, method="satorra.bentler.2001")
+
+lavTestLRT(mgcfa_scalarfit1, mgcfa_scalarfit2, method="satorra.bentler.2010")
+
+# Interpret the p-value: 
+#  - p > 0.05: Suggests non-significant negative variance
+#  - p < 0.05: Suggests significant negative variance
+```
+
+##4.b) Multi-group CFA (excluding New Zealand)
+
+```{r}
+df_longnat_red <- df_longnat %>%
+  filter(countryname != "New Zealand")
+
+cfa_modelfitgroup <- lavaan::cfa(cfamodel, ordered = ordinal_variables, data = df_longnat_red, group = "countrynameyear", std.lv = TRUE)
+summary(cfa_modelfitgroup)
+
+semTools::measurementInvariance(model = cfamodel, ordered = ordinal_variables, data = df_longnat_red, group = "countrynameyear", fit.measures = c("chisq", "df", "cfi", "srmr", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper"))
+
+mgcfa.ord_mitable(model = cfamodel, ordered = ordinal_variables, data = df_longnat_red, group = "countrynameyear")
+
+```
+
+##4.c) Analysis of mean equivalence
+
+```{r}
+mgcfa_scalarfit <- cfa(cfamodel, ordered = TRUE, data = df_longnat_red, group = "countrynameyear", group.equal = c("loadings", "thresholds", "intercepts"), std.lv = TRUE)
+
+mgcfa_meansfit <- cfa(cfamodel, ordered = TRUE, data = df_longnat_red, group = "countrynameyear", group.equal = c("loadings", "intercepts", "thresholds", "means", "residuals"), std.lv = TRUE)
+
+scalarfit <- fitMeasures(mgcfa_scalarfit, c("chisq", "df", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi","aicc", "bic"))
+print(scalarfit)
+
+meansfit <- fitMeasures(mgcfa_meansfit, c("chisq", "df", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr", "cfi","aicc", "bic"))
+print(meansfit)
+
+anova(mgcfa_scalarfit, mgcfa_meansfit)
+```
+
+#5. Scores estimation & extraction
+
+##5.a) Scores estimation
+
+```{r}
+cfa_modelfitgroup <- lavaan::cfa(cfamodel, ordered = ordinal_variables, data = df_longnat_red, group = "countrynameyear", group.equal = c("loadings", "thresholds", "intercepts"), std.lv = TRUE)
+summary(cfa_modelfitgroup)
+
+compRelSEM(cfa_modelfitgroup, ord.scale = TRUE)
+
+modificationIndices(cfa_modelfitgroup, standardized = TRUE, cov.std = TRUE,
+                    information = "expected",
+                    power = FALSE, delta = 0.1, alpha = 0.05,
+                    high.power = 0.75, sort. = FALSE, minimum.value = 0, 
+                    free.remove = TRUE,
+                    na.remove = TRUE, op = NULL)%>%
+                    as.data.frame() %>%
+                    arrange(-mi) %>%
+                    filter(mi > 0) %>%
+                    select(lhs, op, rhs, mi, epc)
+
+### Discriminant validity
+## 1. Confidence Intervals for Inter-Construct Correlations: if no CI includes 1, good
+# Get the estimated covariances between latent variables
+CI95_intercons <- parameterEstimates(cfa_modelfitgroup, ci = TRUE, level = 0.90,
+                   boot.ci.type = "perc", standardized = T)
+CI95_intercons <- CI95_intercons %>%
+  filter(lhs == "ethnic") %>%
+  filter(rhs == "cultural") %>%
+  select(c("group", "est", "se", "z", "pvalue", "ci.lower", "ci.upper")) %>%
+  print()
+
+##3. Fornell-Larcker Criterion:  If VE for a construct is lower than the squared correlation with another construct, it might indicate a lack of discriminant validity for that specific pair
+
+source("https://raw.githubusercontent.com/franciscowilhelm/r-collection/master/forn_larcker_test.R")
+
+#Fornlacker_test <- forn_larcker_test(cfa_modelfitgroup, x = c("ethnic"), y = c("cultural"), z =c("countrynameyear"))
+
+#print(Fornlacker_test)
+
+scores <- lavPredict(cfa_modelfitgroup, newdata = df_longnat_red, type = "lv", method = "EBM",
+           transform = FALSE, se = "standard", acov = "none", 
+           label = TRUE, fsm = FALSE, 
+           append.data = FALSE, assemble = FALSE,
+           level = 1L, optim.method = "bfgs", ETA = NULL)
+
+```
+
+##5.b) Incorporation into the main dataset
+
+```{r}
+for (group in names(scores)) {
+    scores_subset <- scores[[group]]
+    scores_subset <- as.data.frame(scores_subset)
+    scores_subset$countrynameyear <- group
+    # Assign the subset with group name to a variable dynamically
+    group_no_space <- gsub(" ", "", group)
+    assign(paste0("scores_subset_", group_no_space), scores_subset)
+}
+
+scores_subset <- bind_rows(scores_subset_Czechia_2017, scores_subset_Czechia_2021, scores_subset_Germany_2017, scores_subset_Germany_2021, scores_subset_Iceland_2016, scores_subset_Iceland_2017, scores_subset_Lithuania_2016, scores_subset_Lithuania_2020, scores_subset_Netherlands_2017, scores_subset_Netherlands_2021, 
+                        #  scores_subset_NewZealand_2017, scores_subset_NewZealand_2020, 
+                           scores_subset_UnitedStatesofAmerica_2016, scores_subset_UnitedStatesofAmerica_2020)
+
+rm(scores_subset_Czechia_2017, scores_subset_Czechia_2021, 
+   scores_subset_Germany_2017, scores_subset_Germany_2021, 
+   scores_subset_Iceland_2016, scores_subset_Iceland_2017, 
+   scores_subset_Lithuania_2016, scores_subset_Lithuania_2020, 
+   scores_subset_Netherlands_2017, scores_subset_Netherlands_2021, 
+   scores_subset_NewZealand_2017, scores_subset_NewZealand_2020, 
+   scores_subset_UnitedStatesofAmerica_2016, 
+   scores_subset_UnitedStatesofAmerica_2020)
+
+# Use mutate to create the aux_var
+scores_subset <- scores_subset %>% 
+  group_by(countrynameyear) %>%
+  mutate(aux_var = row_number()) %>%
+  ungroup()
+
+df_longnat_v2 <- df_longnat_red %>%
+  group_by(countrynameyear) %>%
+  mutate(aux_var = row_number()) %>%
+  ungroup()
+
+df_longnat_v2 <- left_join(df_longnat_v2, scores_subset, by = c("countrynameyear", "aux_var"))
+df_longnat_v2 <- df_longnat_v2 %>% select(-aux_var) %>% rename(ethnic_nat = ethnic) %>% rename(cultural_nat = cultural)
+
+
+write.csv(df_longnat_v2, file = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data/df_longnat_v2.csv", row.names = FALSE)
+
+```
+
+##5.c) ANOVA
+
+```{r}
+anova.test_ethnic <- anova(lm(ethnic_nat ~ countrynameyear, data = df_longnat_v2))
+
+print(anova.test_ethnic)
+
+anova.test_cult <- anova(lm(cultural_nat ~ countrynameyear, data = df_longnat_v2))
+
+print(anova.test_cult)
+
+anova.test <- anova(lm(cultural_nat + ethnic_nat ~ countrynameyear, data = df_longnat_v2))
+
+print(anova.test)
+
+```
+
+##5.d) Group means estimation
+```{r}
+results <- df_longnat_v2 %>%
+  group_by(countryname, electionyear) %>%
+  summarize(mean_cult = mean(cultural_nat), mean_ethn = mean(ethnic_nat))
+
+print(results)
+
+```
+
+##5.e) Group means visualization
+```{r}
+
+p <- ggplot(results, aes(x = electionyear, y = . , color = countryname)) +
+  geom_line(aes(y = mean_cult, linetype = "solid"), size = 1) +  # Solid line for mean_cult
+  geom_line(aes(y = mean_ethn, linetype = "dashed"), size = 1) +  # Dashed line for mean_ethn
+  labs(x = "Election Year",
+       y = "Mean Score",
+       color = "Country",
+       linetype = "Construct") +  # Set axis labels and legend title
+  scale_linetype_manual(values = c("dashed", "solid"), 
+                       labels = c("Mean Ethnic", "Mean Cultural")) +  # Set line types for variables
+  theme_minimal()  # Optional: adjust plot aesthetics
+
+ggsave("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Longitudinal Analysis/longitudinal_plot.png", plot = p)
+
+
+```
+
+#6. Visualization
+
+##6.a) Density plots of latent scores
+
+
+###6.a) 1.- ethnic national identity type distribution    
+
+```{r}
+p <- df_longnat_v2 %>%
+  ggplot(aes(x = ethnic_nat)) +
+  geom_density(fill = "blue", alpha = 0.7) +
+  geom_vline(xintercept = median(df_longnat_v2$ethnic_nat), color = "red", linetype = "dashed") +
+  labs(title = "Distribution of ethnic Nationality",
+       x = "ethnic national identity type score",
+       y = "Density") +
+  theme_minimal()
+  # Save the plot as an image file (e.g., PNG)
+  ggsave("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Univariate Analysis/ethnic_distribution.png", p)
+ 
+```
+
+###6.a) 2.- ethnic national identity type distribution by country    
+
+```{r}
+p <- df_longnat_v2 %>%
+  ggplot(aes(x = ethnic_nat, colour = countryname, group = countryname)) +
+  geom_density(fill = "blue", alpha = 0.1) +
+  geom_vline(xintercept = median(df_longnat_v2$ethnic_nat), color = "red", linetype = "dashed") +
+  labs(title = "Distribution of ethnic Nationality",
+       x = "ethnic national identity type score",
+       y = "Density") +
+  theme_minimal()
+  # Save the plot as an image file (e.g., PNG)
+  ggsave("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Univariate Analysis/ethnic_distribution_by_country.png", p)
+```
+
+
+###6.a) 2.- cultural national identity type distribution    
+
+```{r}
+p <- df_longnat_v2 %>%
+  ggplot(aes(x = cultural_nat)) +
+  geom_density(fill = "red", alpha = 0.7) +
+  geom_vline(xintercept = median(df_longnat_v2$cultural_nat), color = "red", linetype = "dashed") +
+  labs(title = "Distribution of Constructed Nationality",
+       x = "cultural national identity type score",
+       y = "Density") +
+  theme_minimal()
+  # Save the plot as an image file (e.g., PNG)
+  ggsave("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Univariate Analysis/cultural_distribution.png", p)
+ 
+```
+
+###6.a) 2.- cultural national identity type distribution by country    
+
+```{r}
+p <- df_longnat_v2 %>%
+  ggplot(aes(x = cultural_nat, colour = countryname, group = countryname)) +
+  geom_density(fill = "red", alpha = 0.1) +
+  geom_vline(xintercept = median(df_longnat_v2$cultural_nat), color = "red", linetype = "dashed") +
+  labs(title = "Distribution of cultural Nationality",
+       x = "ethnic national identity type score",
+       y = "Density") +
+  theme_minimal()
+  # Save the plot as an image file (e.g., PNG)
+  ggsave("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Univariate Analysis/cultural_distribution_by_country.png", p)
+```
+
+##6.b) Bivariate plots
+
+###6.b) 1.- Overall
+
+```{r eval=FALSE, include=FALSE}
+latent_variables <- c("ethnic_nat", "cultural_nat")
+correlated_variables <- c("selfpleftright", "agerange", "urbanrural", "edulvl", "cult_immig", "sec_immig", "econ_immig", "quintinc")
+
+for (corr_variable in correlated_variables) {
+  # Filter the data for the variables of interest
+  df_filtered <- df_longnat_v2 %>%
+    group_by(!!sym(corr_variable)) %>%
+    summarise(across(c("ethnic_nat", "cultural_nat"), ~mean(.x, na.rm = TRUE)))
+
+  # Create the plot with all lines in the same plot
+  p <- ggplot(df_filtered, aes_string(x = corr_variable)) +
+    geom_line(aes(y = ethnic_nat, color = "ethnic")) +
+    geom_line(aes(y = cultural_nat, color = "cultural")) +
+    xlab(paste(corr_variable)) +
+    ylab("Average Value") +
+    ggtitle(paste('Average ethnic and cultural by', corr_variable)) +
+    scale_y_continuous(
+    breaks = seq(-1, 1, by = 0.25),  # Adjust breaks as needed
+    labels = scales::number_format(accuracy = 0.1)) +
+    scale_color_manual(values = c("red", "blue")) +
+    theme_minimal()
+
+  # Save the plot as an image file (e.g., PNG)
+  ggsave(paste('C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Bivariate Analysis/', "ethnic_cultural_by_", corr_variable, '.png'), plot = p)
+}
+```
+
+
+###6.b) 2.- By country, for each latent variable
+
+```{r eval=FALSE, include=FALSE}
+latent_variables <- c("ethnic_nat", "cultural_nat")
+correlated_variables <- c("selfpleftright", "agerange", "urbanrural", "edulvl", "cult_immig", "sec_immig", "econ_immig", "quintinc")
+
+for (corr_variable in correlated_variables) {
+  for (lat_variable in latent_variables) {
+    # Filter the data for the variables of interest
+    df_filtered <- df_longnat_v2 %>% 
+      group_by(!!sym(corr_variable), countryname) %>% 
+      summarise(across({{lat_variable}}, ~mean(.x, na.rm = TRUE)))
+    # Create the plot with all lines in the same plot
+    p <- ggplot(df_filtered, aes(x = !!sym(corr_variable), y = !!sym(lat_variable), color = countryname, group = countryname)) +
+      geom_line() +  # Use geom_line to draw lines instead of points
+      xlab(paste(corr_variable)) +
+      ylab(paste('Average', lat_variable)) +
+      ggtitle(paste('Average', lat_variable, 'by', corr_variable)) #+
+      #scale_x_continuous(breaks = unique(df_filtered$corr_variable)) +
+      scale_y_continuous(
+      breaks = seq(-1, 1, by = 0.25),  # Adjust breaks as needed
+      labels = scales::number_format(accuracy = 0.1))
+    
+    # Apply the theme outside of ggplot
+    p <- p + theme_minimal()
+    
+    # Save the plot as an image file (e.g., PNG)
+    ggsave(paste('C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Bivariate Analysis/Country Comparison/', lat_variable, '/', lat_variable, '_by_', corr_variable, '_country.png'), plot = p)
+    
+    #p <- rename(paste(lat_variable, '_by_', corr_variable))
+  }
+}
+```
+
+###6.b) 2.- For each country, by latent variable
+
+```{r eval=FALSE, include=FALSE}
+countrylist <- c("Czechia", "Germany", 
+                 "Lithuania", "Netherlands", 
+                 "New Zealand", "United States of America",
+                 "Iceland")
+
+correlated_variables <- c("selfpleftright", "agerange", "urbanrural", "edulvl", "cult_immig", "sec_immig", "econ_immig", "quintinc")
+
+for (country in countrylist) {
+  for (corr_variable in correlated_variables) {
+    # Filter the data for the variables of interest
+    df_filtered <- df_longnat_v2 %>%
+      filter(countryname == country) %>%
+      group_by(!!sym(corr_variable)) %>%
+      summarise(across(c("ethnic_nat", "cultural_nat"), ~mean(.x, na.rm = TRUE)))
+    
+    # Create the plot with all lines in the same plot
+    p <- ggplot(df_filtered, aes_string(x = corr_variable)) +
+      geom_line(aes(y = ethnic_nat, color = "ethnic")) +
+      geom_line(aes(y = cultural_nat, color = "cultural")) +
+      xlab(paste(corr_variable)) +
+      ylab("Average Value") +
+      ggtitle(paste('Average ethnic and cultural by', corr_variable, 'in', country)) +
+      scale_y_continuous(
+        breaks = seq(-1, 1, by = 0.25),  # Adjust breaks as needed
+        labels = scales::number_format(accuracy = 0.1)) +
+      scale_color_manual(values = c("red", "blue")) +
+      theme_minimal()
+    
+    # Save the plot as an image file (e.g., PNG)
+    ggsave(paste('C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Bivariate Analysis/', country,'/', country, "ethnic_cultural_by_", corr_variable, '.png'), plot = p)
+    }
+}
+
+```
+
+##6.c) Longitudinal plot
+
+```{r}
+# Reshape the data from wide to long format
+df_filtered_long <- df_longnat_v2 %>%
+  pivot_longer(cols = c(ethnic_nat, cultural_nat), names_to = "variable", values_to = "value")
+
+results_filtered_long <- df_filtered_long %>%
+  group_by(countryname, electionyear, variable) %>%
+  summarize(meanscore = mean(value))
+
+print(results_filtered_long)
+
+
+# Create the plot
+p <- ggplot(df_filtered_long, aes(x = electionyear, y = value, color = countryname, linetype = variable)) +
+  geom_line() +
+  scale_linetype_manual(values = c("solid", "dashed")) +
+  labs(x = "Year", y = "Average Score", color = "Country", linetype = "Variable") +
+  ggtitle("Evolution of ethnic and cultural Scores Across Years") +
+  theme_minimal()
+
+# Save the plot as an image file (e.g., PNG)
+ggsave("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Longitudinal Analysis/longitudinal_plot_lava.png", plot = p)
+  
+```
+
+
+
+Additionally, we check the salient factors at each election in order to observe whether they show some qualitative correlation with the results of the quantitative analysis
+
+```{r}
+groups <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Lithuania_2016", "Lithuania_2020", "Netherlands_2017", "Netherlands_2021", "New Zealand_2020", "United States of America_2016", "United States of America_2020"
+)
+
+for (group in groups) {
+  
+  cat(group) 
+  
+  df <- df_longnat_v2 %>%
+    filter(countrynameyear == {{group}}) %>%
+    print(salfact1st, #    >>> MOST SALIENT FACTORS IN ELECTION - 1ST
+           salfact2nd, #    >>> MOST SALIENT FACTORS IN ELECTION - 2ND
+           salfact3rd, #    >>> MOST SALIENT FACTORS IN ELECTION - 3RD
+           salfact4th, #    >>> MOST SALIENT FACTORS IN ELECTION - 4TH
+           salfact5th,)
+
+  }
+```
+
+
+#7. Regression analyses
+
+##7.a) Overall regressions
+
+###7.a) 1.- Regression of latent vars on attitudes towards immigrants
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat + cultural_nat, data = df_longnat_v2)
+summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat + cultural_nat, data = df_longnat_v2)
+summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat + cultural_nat, data = df_longnat_v2)
+summary(sec_model)
+
+adapt_model1 <- lm(ougrcusttrad ~ ethnic_nat, data = df_longnat_v2)
+summary(adapt_model1)
+
+adapt_model2 <- lm(ougrcusttrad ~ cultural_nat, data = df_longnat_v2)
+summary(adapt_model2)
+
+adapt_model3 <- lm(ougrcusttrad ~ ethnic_nat + cultural_nat, data = df_longnat_v2)
+summary(adapt_model3)
+
+stargazer(list(adapt_model1, adapt_model2, adapt_model3), type = "text")
+
+```
+
+```{r}
+# Use stargazer to create the table
+
+
+#library(modelsummary) # Create publication-style regression tables
+#library(flextable) # Create publication-style regression tables
+
+# Generate the regression table using modelsummary
+#reg_table1 <- modelsummary(models, 
+#                          output = "flextable", 
+#                          stars = TRUE)
+
+# Use webshot to save as f.jpg
+#save_as_image(x = reg_table1, path = "C:/Users/miche/Documents/Osqui (L)/R Project CSES 5/Regression tables/Lvl1reg_table_f.jpg")
+```
+
+###7.a) 2.- Regression of interesting vars on latent vars
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat ~ quintinc, data = df_longnat_v2)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat ~ quintinc, data = df_longnat_v2)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat ~ urbanrural, data = df_longnat_v2)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat ~ urbanrural, data = df_longnat_v2)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat ~ edulvl, data = df_longnat_v2)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat ~ edulvl, data = df_longnat_v2)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat ~ edulvl + quintinc, data = df_longnat_v2)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat ~ edulvl + quintinc, data = df_longnat_v2)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+##7.b) Overall regressions with fully standardized latent variables
+
+```{r}
+df_longnat_v2 <- df_longnat_v2 %>%
+  mutate(
+    ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+    cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+  )
+
+```
+
+###7.b) 1.- Regression of standardized latent vars on attitudes towards immigrants
+
+```{r}
+cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v2)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v2)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v2)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v2)
+summary(adapt_model)
+
+polrich_model <- lm(atelcomprbad ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v2)
+summary(polrich_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+###7.b) 1.- Regression of interesting vars on standardized latent vars
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat_std ~ quintinc, data = df_longnat_v2)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat_std ~ quintinc, data = df_longnat_v2)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat_std ~ urbanrural, data = df_longnat_v2)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat_std ~ urbanrural, data = df_longnat_v2)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat_std ~ edulvl, data = df_longnat_v2)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat_std ~ edulvl, data = df_longnat_v2)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat_std ~ edulvl + quintinc, data = df_longnat_v2)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat_std ~ edulvl + quintinc, data = df_longnat_v2)
+#summary(model_cons_3)
+
+model_e5 <- lm(ethnic_nat_std ~ atelstronglead, data = df_longnat_v2)
+summary(model_e5)
+
+model_c5 <- lm(cultural_nat_std ~ atelstronglead, data = df_longnat_v2)
+summary(model_c5)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+##7.c) Regressions by country (latent vars on attitudes towards immigrants)
+
+###7.c) 1.- Czechia
+
+```{r}
+df_czechia <- df_longnat_v2 %>%
+  filter(countryname == "Czechia")
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat + cultural_nat, data = df_czechia)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat + cultural_nat, data = df_czechia)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat + cultural_nat, data = df_czechia)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat + cultural_nat, data = df_czechia)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat ~ quintinc, data = df_czechia)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat ~ quintinc, data = df_czechia)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat ~ urbanrural, data = df_czechia)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat ~ urbanrural, data = df_czechia)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat ~ edulvl, data = df_czechia)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat ~ edulvl, data = df_czechia)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat ~ edulvl + quintinc, data = df_czechia)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat ~ edulvl + quintinc, data = df_czechia)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.c) 2.- Netherlands
+
+```{r}
+df_netherlands <- df_longnat_v2 %>%
+  filter(countryname == "Netherlands")
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat + cultural_nat, data = df_netherlands)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat + cultural_nat, data = df_netherlands)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat + cultural_nat, data = df_netherlands)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat + cultural_nat, data = df_netherlands)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat ~ quintinc, data = df_netherlands)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat ~ quintinc, data = df_netherlands)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat ~ urbanrural, data = df_netherlands)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat ~ urbanrural, data = df_netherlands)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat ~ edulvl, data = df_netherlands)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat ~ edulvl, data = df_netherlands)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat ~ edulvl + quintinc, data = df_netherlands)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat ~ edulvl + quintinc, data = df_netherlands)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.c) 3.- New Zealand
+
+```{r eval=FALSE, include=FALSE}
+df_newzealand <- df_longnat_v2 %>%
+  filter(countryname == "New Zealand")
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat + cultural_nat, data = df_newzealand)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat + cultural_nat, data = df_newzealand)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat + cultural_nat, data = df_newzealand)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat + cultural_nat, data = df_newzealand)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r eval=FALSE, include=FALSE}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat ~ quintinc, data = df_newzealand)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat ~ quintinc, data = df_newzealand)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat ~ urbanrural, data = df_newzealand)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat ~ urbanrural, data = df_newzealand)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat ~ edulvl, data = df_newzealand)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat ~ edulvl, data = df_newzealand)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat ~ edulvl + quintinc, data = df_newzealand)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat ~ edulvl + quintinc, data = df_newzealand)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.c) 4.- Iceland
+
+```{r}
+df_iceland <- df_longnat_v2 %>%
+  filter(countryname == "Iceland")
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat + cultural_nat, data = df_iceland)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat + cultural_nat, data = df_iceland)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat + cultural_nat, data = df_iceland)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat + cultural_nat, data = df_iceland)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat ~ quintinc, data = df_iceland)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat ~ quintinc, data = df_iceland)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat ~ urbanrural, data = df_iceland)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat ~ urbanrural, data = df_iceland)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat ~ edulvl, data = df_iceland)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat ~ edulvl, data = df_iceland)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat ~ edulvl + quintinc, data = df_iceland)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat ~ edulvl + quintinc, data = df_iceland)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.c) 5.- United States of America
+
+```{r}
+df_USA <- df_longnat_v2 %>%
+  filter(countryname == "United States of America")
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat + cultural_nat, data = df_USA)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat + cultural_nat, data = df_USA)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat + cultural_nat, data = df_USA)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat + cultural_nat, data = df_USA)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat ~ quintinc, data = df_USA)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat ~ quintinc, data = df_USA)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat ~ urbanrural, data = df_USA)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat ~ urbanrural, data = df_USA)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat ~ edulvl, data = df_USA)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat ~ edulvl, data = df_USA)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat ~ edulvl + quintinc, data = df_USA)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat ~ edulvl + quintinc, data = df_USA)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.c) 6.- Lithuania
+
+```{r}
+df_lithuania <- df_longnat_v2 %>%
+  filter(countryname == "Lithuania")
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat + cultural_nat, data = df_lithuania)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat + cultural_nat, data = df_lithuania)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat + cultural_nat, data = df_lithuania)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat + cultural_nat, data = df_lithuania)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat ~ quintinc, data = df_lithuania)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat ~ quintinc, data = df_lithuania)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat ~ urbanrural, data = df_lithuania)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat ~ urbanrural, data = df_lithuania)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat ~ edulvl, data = df_lithuania)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat ~ edulvl, data = df_lithuania)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat ~ edulvl + quintinc, data = df_lithuania)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat ~ edulvl + quintinc, data = df_lithuania)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+##7.d) Regressions by country with standardized latent vars
+
+###7.d) 1.- Czechia
+
+```{r}
+df_czechia <- df_longnat_v2 %>%
+  filter(countryname == "Czechia") %>%
+  mutate(
+    ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+    cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+  )
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df_czechia)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df_czechia)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df_czechia)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df_czechia)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat_std ~ quintinc, data = df_czechia)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat_std ~ quintinc, data = df_czechia)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat_std ~ urbanrural, data = df_czechia)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat_std ~ urbanrural, data = df_czechia)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat_std ~ edulvl, data = df_czechia)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat_std ~ edulvl, data = df_czechia)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat_std ~ edulvl + quintinc, data = df_czechia)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat_std ~ edulvl + quintinc, data = df_czechia)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.d) 2.- Netherlands
+
+```{r}
+df_netherlands <- df_longnat_v2 %>%
+  filter(countryname == "Netherlands") %>%
+  mutate(
+    ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+    cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+  )
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df_netherlands)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df_netherlands)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df_netherlands)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df_netherlands)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat_std ~ quintinc, data = df_netherlands)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat_std ~ quintinc, data = df_netherlands)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat_std ~ urbanrural, data = df_netherlands)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat_std ~ urbanrural, data = df_netherlands)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat_std ~ edulvl, data = df_netherlands)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat_std ~ edulvl, data = df_netherlands)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat_std ~ edulvl + quintinc, data = df_netherlands)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat_std ~ edulvl + quintinc, data = df_netherlands)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.d) 3.- New Zealand
+
+```{r eval=FALSE, include=FALSE}
+df_newzealand <- df_longnat_v2 %>%
+  filter(countryname == "New Zealand") %>%
+  mutate(
+    ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+    cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+  )
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df_newzealand)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df_newzealand)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df_newzealand)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df_newzealand)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r eval=FALSE, include=FALSE}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat_std ~ quintinc, data = df_newzealand)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat_std ~ quintinc, data = df_newzealand)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat_std ~ urbanrural, data = df_newzealand)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat_std ~ urbanrural, data = df_newzealand)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat_std ~ edulvl, data = df_newzealand)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat_std ~ edulvl, data = df_newzealand)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat_std ~ edulvl + quintinc, data = df_newzealand)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat_std ~ edulvl + quintinc, data = df_newzealand)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.d) 4.- Iceland
+
+```{r}
+df_iceland <- df_longnat_v2 %>%
+  filter(countryname == "Iceland") %>%
+  mutate(
+    ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+    cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+  )
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df_iceland)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df_iceland)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df_iceland)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df_iceland)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat_std ~ quintinc, data = df_iceland)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat_std ~ quintinc, data = df_iceland)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat_std ~ urbanrural, data = df_iceland)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat_std ~ urbanrural, data = df_iceland)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat_std ~ edulvl, data = df_iceland)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat_std ~ edulvl, data = df_iceland)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat_std ~ edulvl + quintinc, data = df_iceland)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat_std ~ edulvl + quintinc, data = df_iceland)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.d) 5.- United States of America
+
+```{r}
+df_USA <- df_longnat_v2 %>%
+  filter(countryname == "United States of America") %>%
+  mutate(
+    ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+    cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+  )
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df_USA)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df_USA)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df_USA)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df_USA)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat_std ~ quintinc, data = df_USA)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat_std ~ quintinc, data = df_USA)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat_std ~ urbanrural, data = df_USA)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat_std ~ urbanrural, data = df_USA)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat_std ~ edulvl, data = df_USA)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat_std ~ edulvl, data = df_USA)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat_std ~ edulvl + quintinc, data = df_USA)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat_std ~ edulvl + quintinc, data = df_USA)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+###7.d) 6.- Lithuania
+
+```{r}
+df_lithuania <- df_longnat_v2 %>%
+  filter(countryname == "Lithuania") %>%
+  mutate(
+    ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+    cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+  )
+# y is dependent, x1 and x2 are independent variables
+cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df_lithuania)
+#summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df_lithuania)
+#summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df_lithuania)
+#summary(sec_model)
+
+adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df_lithuania)
+summary(adapt_model)
+
+stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text")
+```
+
+```{r}
+# y is dependent, x1 and x2 are independent variables
+model_e1 <- lm(ethnic_nat_std ~ quintinc, data = df_lithuania)
+#summary(model_essen_1)
+
+model_c1 <- lm(cultural_nat_std ~ quintinc, data = df_lithuania)
+#summary(model_cons_1)
+
+model_e2 <- lm(ethnic_nat_std ~ urbanrural, data = df_lithuania)
+#summary(model_essen_2)
+
+model_c2 <- lm(cultural_nat_std ~ urbanrural, data = df_lithuania)
+#summary(model_cons_2)
+
+model_e3 <- lm(ethnic_nat_std ~ edulvl, data = df_lithuania)
+#summary(model_essen_3)
+
+model_c3 <- lm(cultural_nat_std ~ edulvl, data = df_lithuania)
+#summary(model_cons_3)
+
+model_e4 <- lm(ethnic_nat_std ~ edulvl + quintinc, data = df_lithuania)
+#summary(model_essen_3)
+
+model_c4 <- lm(cultural_nat_std ~ edulvl + quintinc, data = df_lithuania)
+#summary(model_cons_3)
+
+stargazer(list(model_e1, model_e3, model_e4), type = "text")
+
+stargazer(list(model_c1, model_c3, model_c4), type = "text")
+
+```
+
+# 7.e) Regressions by country year group
+
+```{r}
+
+groups <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Lithuania_2016", "Lithuania_2020", "Netherlands_2017", "Netherlands_2021", "United States of America_2016", "United States of America_2020"
+)
+
+for (group in groups) {
+  df <- df_longnat_v2 %>%
+    filter(countrynameyear == {{group}}) %>%
+    mutate(
+      ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+      cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+    )
+  cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df)
+  #summary(cult_model)
+
+  econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df)
+  #summary(econ_model)
+
+  sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df)
+  #summary(sec_model)
+
+  adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df)
+  #summary(adapt_model)
+  
+  cat(group)
+
+  stargazer(list(cult_model, econ_model, sec_model, adapt_model), type = "text"#, out = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data visualization/Longitudinal Analysis/my_table.html"
+            )
+}
+
+for (group in groups) {
+  df <- df_longnat_v2 %>%
+    filter(countrynameyear == {{group}}) %>%
+    mutate(
+      ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+      cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+    )
+  essen_model <- lm(ethnic_nat_std ~ edulvl, data = df)
+  #summary(cult_model)
+
+  cons_model <- lm(cultural_nat_std ~ edulvl, data = df)
+  #summary(econ_model)
+  
+  cat(group)
+
+  stargazer(list(cons_model, essen_model), type = "text")
+}
+
+```
+
+```{r eval=FALSE, include=FALSE}
+groups <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Iceland_2016", "Iceland_2017", "Lithuania_2016", "Lithuania_2020", "Netherlands_2017", "Netherlands_2021", "United States of America_2016", "United States of America_2020"
+)
+
+# Create an empty matrix to store coefficients and R-squared values
+results_matrix <- matrix(NA, nrow = length(groups), ncol = 17)
+colnames(results_matrix) <- c("Group", "Cult_Coeff1", "Cult_Coeff2", "Cult_Intercept", 
+                              "Econ_Coeff1", "Econ_Coeff2", "Econ_Intercept",
+                              "Sec_Coeff1", "Sec_Coeff2", "Sec_Intercept",
+                              "Adapt_Coeff1", "Adapt_Coeff2", "Adapt_Intercept",
+                              "Cult_R2", "Econ_R2", "Sec_R2", "Adapt_R2")
+
+# Loop through each group
+for (i in seq_along(groups)) {
+  group <- groups[i]
+  df <- df_longnat_v2 %>%
+    filter(countrynameyear == {{group}}) %>%
+    mutate(
+      ethnic_nat_std = (ethnic_nat - mean(ethnic_nat, na.rm = TRUE)) / sd(ethnic_nat, na.rm = TRUE),
+      cultural_nat_std = (cultural_nat - mean(cultural_nat, na.rm = TRUE)) / sd(cultural_nat, na.rm = TRUE)
+    )
+  
+  # Fit regression models
+  cult_model <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df)
+  econ_model <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df)
+  sec_model <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df)
+  adapt_model <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df)
+  
+  # Store coefficients and R-squared values in the results matrix
+  results_matrix[i, 1] <- group
+  results_matrix[i, 2:4] <- as.numeric(coef(cult_model))
+  results_matrix[i, 5:7] <- as.numeric(coef(econ_model))
+  results_matrix[i, 8:10] <- as.numeric(coef(sec_model))
+  results_matrix[i, 11:13] <- as.numeric(coef(adapt_model))
+  results_matrix[i, 14] <- summary(cult_model)$r.squared
+  results_matrix[i, 15] <- summary(econ_model)$r.squared
+  results_matrix[i, 16] <- summary(sec_model)$r.squared
+  results_matrix[i, 17] <- summary(adapt_model)$r.squared
+}
+
+# Ensure the columns are numeric before calculating averages
+results_matrix[, 2:17] <- as.numeric(as.matrix(results_matrix[, 2:17]))
+#sapply(results_matrix[, 2:13], class)
+
+# Convert each element to numeric in the relevant columns
+#results_matrix[, 2:17] <- lapply(results_matrix[, 2:17], as.numeric)
+
+# Check data types of columns again
+#sapply(results_matrix[, 2:17], class)
+
+# Calculate column averages for coefficient columns
+coeff_averages <- colMeans(results_matrix[, 2:17], na.rm = TRUE)
+
+# Calculate column standard deviations for coefficient columns
+coeff_sd <- apply(results_matrix[, 2:17], 2, sd, na.rm = TRUE)
+
+# Append new rows for averages and standard deviations to the results matrix
+results_matrix <- rbind(results_matrix, coeff_averages, coeff_sd)
+
+# Add row names for clarity
+rownames(results_matrix)[nrow(results_matrix) - 1] <- "Coefficient Averages"
+rownames(results_matrix)[nrow(results_matrix)] <- "Coefficient Standard Deviations"
+
+```
+
+# 7.f) Overall regression with weighted countries
+
+```{r eval=FALSE, include=FALSE}
+# Count the number of observations for each country
+df_longnat_v3 <- df_longnat_v2 %>%
+  group_by(countryname) %>%
+  mutate(weight = 1) %>%  # Initialize weight with a value (e.g., 1)
+  mutate(weight = 1/n())
+  
+
+# Merge the weights with the original dataset
+#df_longnat_v3 <- left_join(df_longnat_v2, country_counts, by = "countrynameyear")
+
+# Add a weight column to the dataset
+#df_longnat_v2$weight <- 1/df_longnat_v2$count
+
+# Now you can use the 'weight' column in your linear regression model
+cult_model_weighted <- lm(cult_immig ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v3, weights = weight)
+summary(cult_model_weighted)
+
+cult_model_weighted <- lm(ougrcusttrad ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v3, weights = weight)
+summary(cult_model_weighted)
+
+cult_model_weighted <- lm(sec_immig ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v3, weights = weight)
+summary(cult_model_weighted)
+
+cult_model_weighted <- lm(econ_immig ~ ethnic_nat_std + cultural_nat_std, data = df_longnat_v3, weights = weight)
+summary(cult_model_weighted)
+
+```
+
+# 8.a) Multigroup SEM
+
+```{r}
+mgsem_model <- '
+  # Measurement model (same as cfamodel)
+  ethnic =~ a1*ancestry + b1*birthplace 
+  cultural =~ a2*language + b2*customs
+  
+  # Thresholds equality
+  ancestry | c1*t1 + d1*t2 + f1*t3
+  birthplace | c2*t1 + d2*t2 + f2*t3
+  language | c3*t1 + d3*t2 + f3*t3
+  customs | c4*t1 + d4*t2 + f4*t3
+
+  # Structural model
+  # ethnic and cultural as predictors
+  #perc_immigrants ~ ethnic + cultural
+  #perc_immig_effect ~ ethnic + cultural
+  econ_immig ~ ethnic + cultural
+  sec_immig ~ ethnic + cultural
+  cult_immig ~ ethnic + cultural
+  ougrcusttrad ~ ethnic + cultural
+  #ougrmajwill ~ ethnic + cultural
+  #selfpleftright ~ ethnic + cultural
+  #pop_att ~ ethnic + cultural
+  
+  # Predicted variable as predicted by secondary variable
+  #perc_immigrants ~ agerange
+  #perc_immigrants ~ selfpleftright
+  #perc_immigrants ~ edulvl
+  
+  # National identity types as predicted
+  #ethnic + cultural ~ selfpleftright
+  #ethnic + cultural ~ urbanrural
+  #ethnic + cultural ~ agerange 
+  ethnic + cultural ~ edulvl
+  #ethnic + cultural ~ quintinc
+'
+
+cfa_modelfitgroup <- lavaan::cfa(mgsem_model, ordered = TRUE, data = df_missrangerimp, group = "countrynameyear", std.lv = TRUE, missing = "pairwise")
+summary(cfa_modelfitgroup)
+```
+
+```{r}
+fit <- sem(model = mgsem_model, ordered = TRUE, data = df_longnat_red, group = "countrynameyear", std.lv = TRUE, missing = "pairwise")
+summary(fit)
+
+```
+
+```{r}
+df_longnat_red <- df_longnat_red %>%
+  mutate(
+    birthplace = factor(birthplace),
+    ancestry = factor(ancestry),
+    language = factor(language),
+    customs = factor(customs),
+    econ_immig = factor(econ_immig),
+    cult_immig = factor(cult_immig),
+    sec_immig = factor(sec_immig),
+    ougrcusttrad = factor(ougrcusttrad),
+    edulvl = factor(edulvl)
+  ) %>%
+  select(c(birthplace, ancestry, language, customs, econ_immig, cult_immig, sec_immig, ougrcusttrad, edulvl, countryname, countrynameyear, electionyear))
+
+library(mice)
+
+set.seed(121012)
+
+predictormatrix<-quickpred(df_longnat_red, 
+                           include=c("econ_immig", "cult_immig", "sec_immig", "ougrcusttrad", "edulvl", "countrynameyear"),
+                           exclude=c("electionyear", "countryname"),
+                           mincor = 0.1)
+
+# Impute 5 datasets (common practice)
+df_longnat_red_imp <- mice(data = df_longnat_red, 
+            predictorMatrix = predictormatrix,
+            m = 5, 
+            #include = c("econ_immig", "cult_immig", "sec_immig", "ougrcusttrad", "edulvl"),
+            # Specify imputation method for ordinal data
+            method = "polr")
+
+mice.imp <- NULL
+for(i in 1:5) mice.imp[[i]] <- complete(df_longnat_red_imp, action=i, inc=FALSE)  
+
+mice.imp <- lapply(mice.imp, FUN = function(x) {
+  x$edulvl <- as.numeric(x$edulvl)
+  return(x)
+})
+
+# run lavaan with previously imputed data using runMI
+out2 <- semTools::runMI(mgsem_model, 
+              data=mice.imp,
+              fun="cfa",
+              meanstructure = TRUE,
+              group = "countrynameyear", ordered = TRUE, 
+              std.lv = TRUE)
+
+library(semTools)
+
+summary(out2)
+```
+
+
+```{r}
+# Create completed datasets 
+df_longnat-red_imp <- complete(imp)
+
+
+# Perform cfa with multiple imputation
+cfa.mi.fit <- cfa.mi(mgsem_model, data = df_longnat_red, m = 20, seed = 12345,
+                     group = "countrynameyear", ordered = TRUE, 
+                     std.lv = TRUE, miArgs = list(ords = c("econ_immig", "cult_immig", "sec_immig", "ougrcusttrad", "edulvl")), miPackage = "mice", method = "polr")
+
+# Summarize the pooled results
+summary(cfa.mi.fit)
+```
+
+```{r}
+
+```
+
+
+#8. Excourse: analysis for panel study in USA
+
+##8.a) Select sample
+
+```{r}
+# Select a subset of observations representing the USA successful panel study (those who were successfully recontacted in the 2020 wave)
+df_natUSApanel <- df_nationalism %>%
+  filter(usapanel == 1)
+
+```
+
+##8.b) Conduct MG-CFA Measurement Invariance Test
+
+```{r}
+mgcfa.ord_mitable(model = cfamodel, ordered = ordinal_variables, data = df_natUSApanel, group = "electionyear")
+
+```
+
+##8.c) Scores estimation
+
+```{r}
+scalarcfa_USApanel <- lavaan::cfa(cfamodel, ordered = ordinal_variables, data = df_natUSApanel, group = "electionyear", group.equal = c("loadings", "thresholds"), std.lv = TRUE)
+summary(scalarcfa_USApanel)
+
+scores <- lavPredict(scalarcfa_USApanel, newdata = df_natUSApanel, type = "lv", method = "EBM",
+           transform = FALSE, se = "standard", acov = "none", 
+           label = TRUE, fsm = FALSE, 
+           append.data = FALSE, assemble = FALSE,
+           level = 1L, optim.method = "bfgs", ETA = NULL)
+
+```
+
+##8.b) Incorporation into the main dataset
+
+```{r}
+for (group in names(scores)) {
+    scores_subset <- scores[[group]]
+    scores_subset <- as.data.frame(scores_subset)
+    scores_subset$electionyear <- group
+    # Assign the subset with group name to a variable dynamically
+    group_no_space <- gsub(" ", "", group)
+    assign(paste0("scores_subset_", group_no_space), scores_subset)
+}
+
+scores_subset <- bind_rows(scores_subset_2016, scores_subset_2020)
+
+# Use mutate to create the aux_var
+scores_subset <- scores_subset %>% 
+  group_by(electionyear) %>%
+  mutate(aux_var = row_number()) %>%
+  ungroup()
+
+df_natUSApanel <- df_natUSApanel %>%
+  group_by(electionyear) %>%
+  mutate(aux_var = row_number()) %>%
+  ungroup()
+
+df_natUSApanel$electionyear <- as.character(df_natUSApanel$electionyear)
+
+df_natUSApanel <- left_join(df_natUSApanel, scores_subset, by = c("electionyear", "aux_var"))
+df_natUSApanel <- df_natUSApanel %>% select(-aux_var) %>% rename(ethnic_nat = ethnic) %>% rename(cultural_nat = cultural)
+
+
+write.csv(df_natUSApanel, file = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data/df_natUSApanel.csv", row.names = FALSE)
+
+```
+
+##8.e) Scores estimation & extraction
+
+```{r}
+
+# Filter data to keep only one row per respondent (e.g., most recent year)
+df_natUSApanel2016 <- df_natUSApanel %>%
+  group_by(usapanelid) %>%
+  dplyr::filter(row_number() == 1) %>%
+  rename_with(~str_c(.x, "_2016")) %>% #, .keep_fixed = vars(usapanelid)) %>% 
+  rename(usapanelid = usapanelid_2016) %>%
+  filter(!is.na(usapanelid))  # Keep only the first row (e.g., most recent year)
+
+df_natUSApanel2021 <- df_natUSApanel %>%
+  group_by(usapanelid) %>%
+  dplyr::filter(row_number() == 2) %>%
+  rename_with(~str_c(.x, "_2021")) %>% #, .keep_fixed = vars(usapanelid)) %>% 
+  rename(usapanelid = usapanelid_2021) %>%
+  filter(!is.na(usapanelid))  # Keep only the first row (e.g., most recent year)
+
+df_natUSApanel_reshaped <- left_join(df_natUSApanel2016, df_natUSApanel2021, by = "usapanelid")
+
+# Delete observations with at least one parent born outside of [country] or the respondant born outside of country
+df_natUSApanel_reshaped <- df_natUSApanel_reshaped %>%
+  filter(parentforeign_2016 == 1)
+
+# Delete observations with missing values across any of the four observable variables/indicators
+df_natUSApanel_reshaped <- df_natUSApanel_reshaped %>%
+  filter(complete.cases(birthplace_2016, ancestry_2016, language_2016, customs_2016, birthplace_2021, ancestry_2021, language_2021, customs_2021
+                        #, econ_immig, cult_immig, sec_immig # Instead, impute values with the average value
+                        ))
+
+
+# Calculate ICC for each variable
+icc_ethnic_nat <- ICC(df_natUSApanel_reshaped$ethnic_nat_2016, df_natUSApanel_reshaped$ethnic_nat_2021)
+icc_cultural_nat <- ICC(df_natUSApanel_reshaped$cultural_nat_2016, df_natUSApanel_reshaped$cultural_nat_2021)
+
+```
+
+
+##5.a) Scores estimation
+
+```{r}
+cfamodel <- '
+  # Observed indicators of the latent variables
+  ethnic =~ ancestry + birthplace
+  cultural =~ language + customs
+  #ethnic ~~ 0*cultural
+'
+
+cfa_modelfitgroup <- lavaan::cfa(cfamodel, ordered = ordinal_variables, data = df_longnat_v3, group = "countrynameyear", group.equal = c("loadings", "thresholds"), std.lv = TRUE)
+summary(cfa_modelfitgroup)
+
+scores <- lavPredict(cfa_modelfitgroup, newdata = df_longnat_v3, type = "lv", method = "EBM",
+           transform = FALSE, se = "standard", acov = "none", 
+           label = TRUE, fsm = FALSE, 
+           append.data = FALSE, assemble = FALSE,
+           level = 1L, optim.method = "bfgs", ETA = NULL)
+
+```
+
+##5. b) Incorporation into the main dataset
+
+```{r}
+for (group in names(scores)) {
+    scores_subset <- scores[[group]]
+    scores_subset <- as.data.frame(scores_subset)
+    scores_subset$countrynameyear <- group
+    # Assign the subset with group name to a variable dynamically
+    group_no_space <- gsub(" ", "", group)
+    assign(paste0("scores_subset_", group_no_space), scores_subset)
+}
+
+scores_subset <- bind_rows(scores_subset_Czechia_2017, scores_subset_Czechia_2021, scores_subset_Germany_2017, scores_subset_Germany_2021, scores_subset_Iceland_2016, scores_subset_Iceland_2017, scores_subset_Lithuania_2016, scores_subset_Lithuania_2020, scores_subset_Netherlands_2017, scores_subset_Netherlands_2021, scores_subset_NewZealand_2020, scores_subset_UnitedStatesofAmerica_2016, scores_subset_UnitedStatesofAmerica_2020)
+
+rm(scores_subset_Czechia_2017, scores_subset_Czechia_2021, 
+   scores_subset_Germany_2017, scores_subset_Germany_2021, 
+   scores_subset_Iceland_2016, scores_subset_Iceland_2017, 
+   scores_subset_Lithuania_2016, scores_subset_Lithuania_2020, 
+   scores_subset_Netherlands_2017, scores_subset_Netherlands_2021, scores_subset_NewZealand_2020, 
+   scores_subset_UnitedStatesofAmerica_2016, 
+   scores_subset_UnitedStatesofAmerica_2020, semFit, df_nationalism,
+   cfa_modelfitgroup)
+
+# Use mutate to create the aux_var
+scores_subset <- scores_subset %>% 
+  group_by(countrynameyear) %>%
+  mutate(aux_var = row_number()) %>%
+  ungroup()
+
+df_longnat_v3 <- df_longnat %>%
+  group_by(countrynameyear) %>%
+  mutate(aux_var = row_number()) %>%
+  ungroup()
+
+df_longnat_v3 <- left_join(df_longnat_v3, scores_subset, by = c("countrynameyear", "aux_var"))
+df_longnat_v3 <- df_longnat_v3 %>% select(-aux_var) %>% rename(ethnic_nat = ethnic) %>% rename(cultural_nat = cultural)
+
+
+#write.csv(df_longnat_v2, file = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Data/df_longnat_v2.csv", row.names = FALSE)
+
+```
+```{r}
+cult_model <- lm(cult_immig ~ ethnic_nat + cultural_nat, data = df_longnat_v3)
+summary(cult_model)
+
+econ_model <- lm(econ_immig ~ ethnic_nat + cultural_nat, data = df_longnat_v3)
+summary(econ_model)
+
+sec_model <- lm(sec_immig ~ ethnic_nat + cultural_nat, data = df_longnat_v3)
+summary(sec_model)
+```
+
+
+#3. Longitudinal Set Measurement Invariance Testing
+
+##3.a) No-groups BSEM
+
+```{r eval=FALSE, include=FALSE}
+modelbsem <- '
+  # Observed indicators of the latent variables
+  ethnic =~ ancestry + birthplace
+  cultural =~ language + customs
+'
+
+# Run model
+bsemfit_long <- bsem(
+  modelbsem,
+  data = df_longnat,
+  cp = "srs",  # Specify the prior on covariance parameters,
+  dp = dpriors(tau = "normal(0, .5)"),
+  mcmcextra = list(data = list(moment_match_k_threshold = 0.5)),
+  save.lvs = TRUE  # Enable moment matching for LOOIC
+)
+
+save(bsemfit_long, file = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/bsemfit_long.R")
+load("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/bsemfit_long.R")
+
+summary(bsemfit_long)
+
+fitMeasures(bsemfit_long, c("ppp", "HDP"))
+
+PPMC <- blavFitIndices(bsemfit_long, baseline.model = bsemfit_long,
+                       pD = "loo", rescale = "PPMC")
+```
+
+##3.b) Configural fit
+
+```{r eval=FALSE, include=FALSE}
+long_configuralfit <- bsem(
+  cfamodel,
+  data = df_longnat,
+  group = "countrynameyear",
+  cp = "srs",  # Specify the prior on covariance parameters
+  mcmcextra = list(data = list(moment_match_k_threshold = 0.5)),
+  save.lvs = TRUE  # Enable moment matching for LOOIC
+)
+
+save(long_configuralfit, file = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/long_configuralfit.R")
+load("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/long_configuralfit.R")
+
+summary(long_configuralfit)
+
+fitMeasures(long_configuralfit)
+
+PPMC <- blavFitIndices(long_configuralfit, baseline.model = long_configuralfit,
+                       pD = "waic", rescale = "PPMC")
+
+
+```
+
+##2.c) 2. Metric fit
+
+```{r eval=FALSE, include=FALSE}
+long_metricfit<- bsem(
+  cfamodel,
+  data = df_longnat,
+  group = "countrynameyear", 
+  group.equal = "loadings",
+  cp = "srs",  # Specify the prior on covariance parameters
+  mcmcextra = list(data = list(moment_match_k_threshold = 0.5)),  
+  wiggle = "loadings", # List approximately constrained paramenters
+  wiggle.sd = 0.1, 
+  save.lvs = TRUE  # Enable moment matching for LOOIC
+)
+
+save(long_metricfit, file = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/long_metricfit.R")
+load("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/long_metricfit.R")
+
+summary(long_metricfit)
+
+fitMeasures(long_metricfit)
+
+```
+
+##2.c) 3. Scalar fit
+
+```{r eval=FALSE, include=FALSE}
+# List approximately constrained paramenters
+scalarconstraints <- c("loadings", "intercepts")
+
+long_scalarfit <- bsem(
+  cfamodel,
+  data = df_longnat,
+  group = "countrynameyear", 
+  group.equal = c("loadings", "intercepts"),
+  cp = "srs",  # Specify the prior on covariance parameters
+  mcmcextra = list(data = list(moment_match_k_threshold = 0.5)),  
+  wiggle = scalarconstraints,
+  wiggle.sd = 0.1, 
+  save.lvs = TRUE  # Enable moment matching for LOOIC
+)
+
+save(long_scalarfit, file = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/long_scalarfit.R")
+load("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/long_scalarfit.R")
+
+summary(long_scalarfit)
+
+fitMeasures(long_scalarfit, c("ppp", "HDP"))
+
+PPMC <- blavFitIndices(long_scalarfit, baseline.model = long_configuralfit,
+                       pD = "waic", rescale = "PPMC")
+
+```
+
+##2.c) 4. Strict fit
+
+```{r eval=FALSE, include=FALSE}
+
+long_strictfit <- bsem(
+  cfamodel,
+  data = df_longnat,
+  group = "countrynameyear", 
+  group.equal = c("loadings", "intercepts", "residuals"),
+  cp = "srs",  # Specify the prior on covariance parameters
+  mcmcextra = list(data = list(moment_match_k_threshold = 0.5)), 
+  wiggle = scalarconstraints,
+  wiggle.sd = 0.1,  
+  save.lvs = TRUE  # Enable moment matching for LOOIC
+)
+
+save(long_strictfit, file = "C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/long_strictfit.R")
+#load("C:/Users/oscar/Documents/Projects/Master Thesis - Oscar Garcia/Quantitative Analysis/Model fits/BSEM/long_strictfit.R")
+
+summary(long_strictfit)
+
+fitMeasures(long_strictfit)
+
+```
+
+##2.c) 5. Fit comparison
+
+```{r eval=FALSE, include=FALSE}
+blavCompare(long_configuralfit, long_metricfit)
+blavCompare(long_metricfit, long_scalarfit)
+blavCompare(long_scalarfit, long_strictfit)
+
+```
+
+
+#3. Alignment optimization
+
+##3.a) Baseline configural equivalence model
+
+```{r}
+conf_modelfit <- lavaan::cfa(cfamodel, data = df_longnat, group = "countryyear", std.lv = TRUE)
+summary(conf_modelfit, fit.measures = TRUE, standardized = TRUE)
+
+```
+
+
+##3.a) Extract loadings and intercepts in IxG matrix
+
+###3.a) 1. Loadings extraction
+
+```{r}
+# Loadings and intercepts from lavaan model fit (replace with your extraction)
+# Extract group-specific estimates
+group_estimates <- parameterEstimates(conf_modelfit)
+
+# Extract loadings
+loadings_pattern <- grepl("=~", group_estimates$op) #searches for rows in the "op" column that contain the text " =~ ".
+loadings <- group_estimates[loadings_pattern, ]
+
+# Reshape loadings to Item x Group matrix
+item_group_loadings <- dcast(loadings[, c("rhs", "group", "est")], rhs ~ group, value.var = "est")
+
+# Fix row names
+rownames(item_group_loadings) <- c("ancestry", "birthplace", "language", "customs")
+
+# Select columns starting from the second onwards (excluding the first)
+item_group_loadings <- item_group_loadings[ , -1]
+
+# Fix column names
+colnames(item_group_loadings) <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Lithuania_2016", "Lithuania_2020", "Netherlands_2017", "Netherlands_2020", "New Zealand_2017", "New Zealand_2020", "United States of America_2016", "United States of America_2020"
+)
+
+# Assuming item_group_loadings is your actual matrix
+item_group_loadings <- t(item_group_loadings)
+
+# Split into two parts (columns 1 & 2, columns 3 & 4)
+ethnic_ig_loadings <- item_group_loadings[, 1:2]
+ethnic_ig_loadings <- rbind(ethnic_ig_loadings[8, ], ethnic_ig_loadings[1:7, ], ethnic_ig_loadings[9:12, ]) # Reorder matrix to place Netherlands_2020 first, thus as reference group
+row.names(ethnic_ig_loadings) <- row.names(item_group_loadings)[c(8, 1:7, 9:12)]  # Reassign original row names
+
+cultural_ig_loadings <- item_group_loadings[, 3:4]
+cultural_ig_loadings <- rbind(cultural_ig_loadings[8, ], cultural_ig_loadings[1:7, ], cultural_ig_loadings[9:12, ]) # Reorder matrix to place Netherlands_2020 first, thus as reference group
+row.names(cultural_ig_loadings) <- row.names(item_group_loadings)[c(8, 1:7, 9:12)]  # Reassign original row names
+
+```
+
+###3.a) 2. Intercepts extraction
+
+```{r}
+# Extract intercepts 
+#(grepl("~~", group_estimates$op) ensures the row has "~~" in the operator column.
+#grepl("^[^~]+", group_estimates$lhs) looks for rows in the "lhs" column where the string starts with any characters except "~" (assuming the intercept variable names don't include "~").
+intercept_pattern <- grepl("~~", group_estimates$op) & grepl("^[^~]+", group_estimates$lhs) & grepl("ancestry|birthplace|language|customs", group_estimates$rhs)
+intercepts <- group_estimates[intercept_pattern, ]
+
+# Reshape loadings to Item x Group matrix
+item_group_intercepts <- dcast(intercepts[, c("rhs", "group", "est")], rhs ~ group, value.var = "est")
+
+# Fix row names
+rownames(item_group_intercepts) <- c("ancestry", "birthplace", "language", "customs")
+
+# Select columns starting from the second onwards (excluding the first)
+item_group_intercepts <- item_group_intercepts[ , -1]
+
+# Fix column names
+colnames(item_group_intercepts) <- c(
+  "Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", "Lithuania_2016", "Lithuania_2020", "Netherlands_2017", "Netherlands_2020", "New Zealand_2017", "New Zealand_2020", "United States of America_2016", "United States of America_2020"
+)
+
+# Assuming item_group_loadings is your actual matrix
+item_group_intercepts <- t(item_group_intercepts)
+
+# Split into two parts (columns 1 & 2, columns 3 & 4)
+ethnic_ig_intercepts <- item_group_intercepts[, 1:2]
+ethnic_ig_intercepts <- rbind(ethnic_ig_intercepts[8, ], ethnic_ig_intercepts[1:7, ], ethnic_ig_intercepts[9:12, ]) # Reorder matrix to place Netherlands_2020 first, thus as reference group
+row.names(ethnic_ig_intercepts) <- row.names(item_group_intercepts)[c(8, 1:7, 9:12)]  # Reassign original row names
+
+cultural_ig_intercepts <- item_group_intercepts[, 3:4]
+cultural_ig_intercepts <- rbind(cultural_ig_intercepts[8, ], cultural_ig_intercepts[1:7, ], cultural_ig_intercepts[9:12, ]) # Reorder matrix to place Netherlands_2020 first, thus as reference group
+row.names(cultural_ig_intercepts) <- row.names(item_group_intercepts)[c(8, 1:7, 9:12)]  # Reassign original row names
+
+```
+
+##3.b) Conduct alignment optimization
+Threshold parameters	suggested	by	Fischer	and	Karl	(2019),	i.e.,	align.scale	=	c(0.2,	0.4) and	align.pow	= c(0.25,	0.25),	to	address	the	significant	non-invariance	issue.
+
+###3.b) 2. Conduct alignment for ethnic
+
+```{r}
+ethnic_aligned_est <- invariance.alignment(lambda = ethnic_ig_loadings, 
+                                    nu = ethnic_ig_intercepts,	
+                                    #wgt = matrix(sqrt(Ng))
+                                    align.scale	=	c(0.2,	0.4),	
+                                    align.pow	=	c(0.25,	0.25),
+                                    #center = TRUE, # Logical indicating whether estimated means and standard deviations should be centered.
+                                    fixed = FALSE, # Logical indicating whether SD of first group should be fixed to one. If fixed=FALSE, the product of all SDs is set to one. If NULL, then fixed is automatically chosen by default. For many groups, fixed=FALSE is chosen
+                                    #meth = 1.5#, # Method used for optimization function. meth=1 is the default and the optimization function used in Mplus
+                                    #vcov = TRUE
+                                    ) # Set 8th group (Netherlands_2020, with lowest mean) as reference
+ethnic_aligned_est$pars
+ethnic_aligned_est$es.invariance['R2',]
+```
+
+###3.b) 1. Conduct alignment for cultural
+
+```{r}
+cultural_aligned_est <- invariance.alignment(lambda = cultural_ig_loadings, 
+                                    nu = cultural_ig_intercepts,	
+                                    align.scale	=	c(0.2,	0.4),	
+                                    align.pow	=	c(0.25,	0.25), # Set 8th group (Netherlands_2020, with lowest mean) as reference
+                                    fixed = FALSE
+)
+
+cultural_aligned_est$pars
+cultural_aligned_est$es.invariance['R2',]
+
+```
+
+###3.b) 3.- Plot
+
+```{r}
+# Create the plot using ggplot2
+library(ggplot2)
+
+# Vector of new row names
+new_row_names <- c("CZE_2017", "CZE_2021", "DEU_2017", "DEU_2021", "LTU_2016", "LTU_2020", 
+                   "NLD_2017", "NLD_2021", "NZL_2017", "NZL_2020", "USA_2016", "USA_2020")
+
+# Extract year from group names
+get_year <- function(group_name) {
+  as.numeric(strsplit(group_name, "_")[[1]][2])
+}
+
+# Prepare data for plotting
+cultural_data <- data.frame(
+  year = sapply(rownames(cultural_aligned_est$pars), get_year),
+  score = cultural_aligned_est$pars[, 1]  # Assuming first column holds the parameter
+)
+rownames(cultural_data) <- new_row_names
+
+ethnic_data <- data.frame(
+  year = sapply(rownames(cultural_aligned_est$pars), get_year),
+  score = ethnic_aligned_est$pars[, 1]  # Assuming first column holds the parameter
+)
+rownames(ethnic_data) <- new_row_names
+
+# Combine data from both sources
+data <- rbind(cultural_data, ethnic_data)
+
+# Round scores to two decimal places
+data$score <- round(data$score, 2)
+
+# Extract country names from rownames and combine with scores
+data$label <- sapply(rownames(data), function(x) {
+  country <- strsplit(x, "_")[[1]][1]
+  paste(country, ": ", sep="")
+})
+
+data$label <- paste(data$label, data$score, sep = " ")
+
+# Define the values for the "Construct" column
+construct_values <- c(rep("cultural", 12), rep("ethnic", 12))
+
+# Create the "Construct" column
+data$construct <- construct_values
+
+# Plot
+ggplot(data, aes(x = year, y = score, color = construct)) +
+  geom_text(aes(label = label)) +  # Add labels with corresponding 'label' column
+  scale_x_discrete( # Set x-axis to represent years as discrete values
+    labels = unique(data$year)  # Use unique years for labels
+  ) +
+  scale_color_manual(values = c("red", "blue")) +  # Set color for each construct
+  labs(title = "Label Positions based on Score and Year",  # Add plot title
+       x = "Year",  # Label x-axis
+       y = "Score")  # Label y-axis
+
+```
+
+
+##3.c) Item-level evaluation	to	examine	whether	there	is	any	item	demonstrating	significant	deviation
+Tolerance	parameters	for	factor loadings	(.40)	and	intercepts	(.20)	following	Fisher	and	Karl	(2019)
+
+###3.c) 1. Item-level evaluation of ethnic
+
+```{r}
+c_ethnic_aligned	<- invariance_alignment_constraints (ethnic_aligned_est,	lambda_parm_tol	=	.4,	nu_parm_tol	
+=	.2)
+summary(c_ethnic_aligned)
+
+```
+
+###3.c) 2. Item-level evaluation of cultural
+
+```{r}
+c_cultural_aligned	<- invariance_alignment_constraints (cultural_aligned_est,	lambda_parm_tol	=	.4,	nu_parm_tol	
+=	.2)
+summary(c_cultural_aligned)
+
+```
+
+##3.d) Monte Carlo simulations
+
+```{r eval=FALSE, include=FALSE}
+#	start	simulation	with	n	=	100
+n	<- 100
+now	<- foreach	(i	=	seq(1,times))	%dopar%{
+		#	do	simulation
+				simulation(n, data, cfa_model.help, ‘help’,
+													n.include,	data$country, var.help, par.help, i)
+}
+```
+
+
+###3.d) 1. For ethnic
+
+
+#4. CFA for each country-year in df_longnat
+
+```{r}
+
+# Loop through countries and years
+country_yearlist <- c("Czechia_2017", "Czechia_2021", "Germany_2017", "Germany_2021", 
+                 "Lithuania_2016", "Lithuania_2020", "Netherlands_2017", "Netherlands_2021", 
+                 "New Zealand_2017", "New Zealand_2020", "United States of America_2016", "United States of America_2020",
+                 "Iceland_2016", "Iceland_2017")
+
+# Assuming your data is in a long format dataframe named df_longnat
+# and your CFA model is specified in cfamodel
+
+
+for (countryyear in country_yearlist) {
+  # Subset data for current country and year
+  data.subset <- df_longnat[df_longnat$countrynameyear == countryyear, ]
+  
+  # Remove spaces using str_replace
+  countryyear.clean <- str_replace_all(countryyear, "\\s", "")
+  
+  # Conduct CFA for this subset
+  fit.result <- lavaan::cfa(cfamodel, data = data.subset, std.lv = TRUE)
+  fitMeasures1 <- fitMeasures(fit.result)
+  # Store results with a descriptive name based on countryyear.clean
+  result.name <- paste0("cfafit_", countryyear.clean)
+  assign(result.name, fit.result)
+}
+
+fitMeasures(cfafit_Czechia_2017, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitmeasures(cfafit_Czechia_2021, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitmeasures(cfafit_Germany_2017, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_Germany_2021, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_Lithuania_2016, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitmeasures(cfafit_Lithuania_2020, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitmeasures(cfafit_Netherlands_2017, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_Netherlands_2021, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_NewZealand_2017, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_NewZealand_2020, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_UnitedStatesofAmerica_2016, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_UnitedStatesofAmerica_2020, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_Iceland_2016, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+fitMeasures(cfafit_Iceland_2017, c("chisq", "cfi", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "srmr"))
+            
+# fit.results now contains a list with results for each country-year combination.
+# Each entry has two elements: fit (the lavaan model fit object) and indices (a named vector of fit statistics)
+
+```
+
+#5. MG-CFA for each country, at year.
+
+##5.a) MG-CFA
+
+```{r}
+
+
+# Create the vector countrylist
+countrylist <- c(
+  "Czechia", "Germany", "Lithuania", "Netherlands", "New Zealand", "United States of America", "Iceland"
+)
+
+# Loop through the vector
+for (country in countrylist) {
+  cat("Country:", country, "\n")
+  
+  # Replace spaces with underscores in the country name
+  country_cleaned <- gsub(" ", "_", country)
+  
+  # Filter data for the current country
+  df_country <- df_longnat[df_longnat$countryname == country, ]
+  
+  # Print the number of observations (n) for the current country
+  cat("n =", nrow(df_country), "\n")
+  
+  mgcfa_mitable(data = df_country, ordered = ordinal_variables, model = cfamodel, group = "countrynameyear")
+
+  # Store the results and data frames with cleaned country names
+  #assign(paste0("lngMGCFA_result_", country_cleaned), MGCFA_result)
+}
+```
+
+##5.b) Estimation of means
+
+```{r}
+df_czechia <- df_longnat[df_longnat$countryname == "Czechia", ]
+fit <- cfa(cfamodel, data = df_czechia, group = "countrynameyear", group.equal = c("loadings", "intercepts"))
+
+scores <- lavPredict(fit, newdata = df_czechia, type = "lv", method = "EBM",
+           transform = FALSE, se = "standard", acov = "none", 
+           label = TRUE, fsm = FALSE, 
+           append.data = FALSE, assemble = FALSE,
+           level = 1L, optim.method = "bfgs", ETA = NULL)
+
+# Convert scores to a matrix
+scores_matrix <- as.matrix(scores)
+
+# Extract matrices for each year
+matrix_2017 <- scores_matrix[[1]]
+matrix_2021 <- scores_matrix[[2]]
+
+# Normalize factor scores
+normalized_scores_2017 <- apply(matrix_2017, 2, function(x) (x - min(x)) / (max(x) - min(x)))
+normalized_scores_2021 <- apply(matrix_2021, 2, function(x) (x - min(x)) / (max(x) - min(x)))
+
+# Calculate mean normalized factor scores for each year
+mean_normalized_scores_2017 <- colMeans(normalized_scores_2017)
+mean_normalized_scores_2021 <- colMeans(normalized_scores_2021)
+
+# Create a data frame for mean normalized scores
+mean_normalized_scores_df <- data.frame(
+  Year = c("2017", "2021"),
+  ethnic_mean_normalized = c(mean_normalized_scores_2017["ethnic"], mean_normalized_scores_2021["ethnic"]),
+  cultural_mean_normalized = c(mean_normalized_scores_2017["cultural"], mean_normalized_scores_2021["cultural"])
+)
+
+# Print the mean normalized factor scores
+print(mean_normalized_scores_df)
+
+# Convert the matrix to a data frame
+normalized_scores_2017_df <- as.data.frame(normalized_scores_2017)
+normalized_scores_2021_df <- as.data.frame(normalized_scores_2021)
+
+# Optionally, set column names
+colnames(normalized_scores_2017_df) <- c("ethnic", "cultural")
+colnames(normalized_scores_2021_df) <- c("ethnic", "cultural")
+
+# Merge scores with df_czechia
+df_czechia$ethnic[df_czechia$countrynameyear == "Czechia_2017"] <- normalized_scores_2017_df$ethnic
+df_czechia$ethnic[df_czechia$countrynameyear == "Czechia_2021"] <- normalized_scores_2021_df$ethnic
+
+df_czechia$cultural[df_czechia$countrynameyear == "Czechia_2017"] <- normalized_scores_2017_df$cultural
+df_czechia$cultural[df_czechia$countrynameyear == "Czechia_2021"] <- normalized_scores_2021_df$cultural
+
+```
+
