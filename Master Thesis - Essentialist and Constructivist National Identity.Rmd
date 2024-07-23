@@ -6,11 +6,59 @@ output: html_document
 ---
 Factor Analyses
 
-Summary: The following R.Markdown file takes upon the df_nationalism dataset generated in "Data cleaning and wrangling" and tries to execute Bayesian alignment optimization using MIE.
+Summary: The following R.Markdown file takes upon the df_nationalism dataset generated in "Data cleaning and wrangling", cleans the data and executes various factor analysis procedures.
 
 It is recommended to move through the script using the Outline buttom in the upper right corner of the R.Studio script visualization window, which contains all tasks numerated and defined.
 In order to reset the source directory, it is recommended to use the Find/Replace tool from the upper toolbar, searching for "C:/Users/oscar/Documents/Projects/" and substituting for the adequate directory where the folder "Master Thesis - Oscar Garcia" is located
-  
+
+---------------------------------------------------------------------------------------------------------------------------------
+
+Index of (main) content:
+1. Preparatory tasks
+1.a) Reset space and charge libraries
+1.b) Open dataset 
+1.c) Prepare the data
+1.c) 1.- Rename variables to improve clarity
+1.c) 1.- Recode variables of attitudes against immigrants
+1.d) Prepare country-years subset
+1.c) 1.- Delete observations with at least one parent born outside of [country] or the respondant born outside of country
+1.c) 2.- Delete observations with missing values across any of the four observable variables/indicators
+1.e) Create ordinal_variables vector to use to design the ordinal character of the variables tested & set labels for lavaanPlot
+1.f) Activate mgcfa_mitable function to simplify MG-CFA results assessment
+1.g) Create descriptive statistics table of groups
+1.h) NAs procedure
+1.h) 1.- Count NAs per variable and average NAs
+1.h) 2.- Test MCAR between NAs in associated vars and national identity measures
+1.h) 3.- Imputation with kNN
+1.h) 4.- Imputation with missRanger
+1.h) 5.- Count NAs per variable and average NAs
+2. CFA analysis
+2.a) Two-factor model
+2.a) 1.- Model specification
+2.a) 2.- CFA model
+2.a) 3.- CFA model for each group
+2.b) One-factor CFA models for contrast
+2.b) 1.- Model specfication
+2.b) 2.- One-factor CFA model
+2.b) 3.- One-factor group-level CFA
+3. SEM models 
+3.a) SEM model for all samples
+3.c) SEM model for each group
+4. Multigroup analyses
+4.a) Multi-group CFA 
+4.a) 1.- Theta MG-CFA
+4.a) 2.- Testing for significance of negative residual variance of New Zealand in 2017
+4.a) 3.- Testing for significance of excessive interconstruct correlation of USA
+4.b) Multi-group CFA (excluding New Zealand)
+4.c) Analysis of mean equivalence
+5. Scores estimation & extraction
+5.a) Scores estimation
+5.b) Incorporation into the main dataset
+5.c) ANOVA
+5.d) Group means estimation
+5.e) Group means visualization
+
+---------------------------------------------------------------------------------------------------------------------------
 #1. Preparatory tasks
 
 ##1.a) Reset space and charge libraries
@@ -61,7 +109,7 @@ df_nationalism <- df_nationalism %>%
 
 ```
 
-###1.c) 1.- Recode variables of attitudes against immigrants
+###1.c) 2.- Recode variables of attitudes against immigrants
 
 ```{r}
 # Impute average to _immig variables
