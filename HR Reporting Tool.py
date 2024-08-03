@@ -4,16 +4,6 @@
 # Purpose: automating the periodic creation of a PowerPoint report based on sql relational database Employees, available
 # under https://downloads.mysql.com/docs/employee-en.pdf and https://dev.mysql.com/doc/index-other.html
 
-# Here we aim to independently fetch and process into a functional dataframe each independent piece of data required by
-# the project. This is:
-# * For historical analysis:
-# - Employees df containing: emp_no, gender, hired_date, to_date
-# - Department df containing: dept_no, dept_name, emp_no, gender, hired_date, to_date (tables departments, dept_emp and
-#   employees)
-# - Salary df containing: emp_no, gender, salary, from_date, to_date (tables salary and employees)
-# * For current analysis (select only emp_no's with invalid to_date):
-# - Employees df containing: emp_no, gender, salary, title, salary, dept_name
-
 # 0. Preparatory tasks
 # Press Shift+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
@@ -71,9 +61,9 @@ prs = Presentation()
 
 
 # Function to set the footer for each slide
-def set_footer(slide):
+def set_footer(slide, slide_number):
     left_text = "CONFIDENTIAL - Do not distribute"
-    right_text = datetime.now().strftime("%B %d, %Y")
+    right_text = datetime.now().strftime("%B %d, 2024")
 
     # Add left text box
     left_box = slide.shapes.add_textbox(Inches(0.5), Inches(7), Inches(5), Inches(0.5))
@@ -85,9 +75,9 @@ def set_footer(slide):
         paragraph.font.color.rgb = RGBColor(0, 0, 0)  # Black color
 
     # Add right text box
-    right_box = slide.shapes.add_textbox(Inches(8.5), Inches(7), Inches(2), Inches(0.5))
+    right_box = slide.shapes.add_textbox(Inches(8), Inches(7), Inches(2), Inches(0.5))
     right_frame = right_box.text_frame
-    right_frame.text = right_text
+    right_frame.text = f"{right_text} - Pg. {slide_number}"
     for paragraph in right_frame.paragraphs:
         paragraph.font.size = Pt(10)
         paragraph.font.name = 'Segoe UI Light'
@@ -149,7 +139,9 @@ def create_slide(prs, title_text, content=None, img_path=None):
     if img_path:
         slide.shapes.add_picture(img_path, Inches(1), Inches(1.5), width=Inches(8.5))
 
-    set_footer(slide)
+
+    slide_number = len(prs.slides)
+    set_footer(slide, slide_number)
     set_background(slide, img_path='C:/Users/oscar/Documents/Projects/Report Automation Project/Supporting materials/slide_background2.jpg')
 
 
@@ -164,11 +156,69 @@ subtitle.text = "Automated Report Generated with Python"
 # Set title and subtitle font to Georgia
 title.text_frame.paragraphs[0].font.name = 'Segoe UI Semibold'
 title.text_frame.paragraphs[0].font.color.rgb = RGBColor(23, 55, 94)
-subtitle.text_frame.paragraphs[0].font.name = 'Georgia'
+subtitle.text_frame.paragraphs[0].font.name = 'Segoe UI Light'
 
-set_footer(slide)
+set_footer(slide, 1)
 set_background(slide,
                img_path='C:/Users/oscar/Documents/Projects/Report Automation Project/Supporting materials/slide_background2.jpg')  # Light grey background
+
+# 0.f. Slide 2: Index
+# Create slides with desired content
+def create_slide_index(prs, title_text, content=None):
+    slide_layout = prs.slide_layouts[5]
+    slide = prs.slides.add_slide(slide_layout)
+    title = slide.shapes.title
+    title.text = title_text
+
+    # Set title font to Georgia, size to 24, and align left
+    title_frame = title.text_frame
+    title_paragraph = title_frame.paragraphs[0]
+    title_paragraph.font.name = 'Segoe UI Semibold'
+    title_paragraph.font.size = Pt(30)
+    title_paragraph.font.color.rgb = RGBColor(23, 55, 94)
+    title_paragraph.alignment = PP_ALIGN.LEFT
+
+    # Define text box position and size
+    left = Inches(0.5)
+    top = Inches(1.5)
+    width = Inches(9.0)
+    height = Inches(5.0)
+
+    if content:
+        # Add a textbox for the content
+        textbox = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8.5), Inches(5.5))
+        text_frame = textbox.text_frame
+        for item in content:
+            p = text_frame.add_paragraph()
+            p.text = item
+            p.font.size = Pt(18)
+            p.font.name = 'Segoe UI Light'
+
+    slide_number = len(prs.slides)
+    set_footer(slide, slide_number)
+    set_background(slide,
+                   img_path='C:/Users/oscar/Documents/Projects/Report Automation Project/Supporting materials/slide_background2.jpg')
+
+
+content = [
+    f"Current Employees Overview..............................................................................3",
+    f"Number of Employees and Average Salary (USD, K) by Department......4",
+    f"Number of Employees and Average Salary (USD, K) by Title.....................5",
+    f"ESRS Disclosure requirement S1-7: Gender Ratio across Workforce........6",
+    f"ESRS Disclosure requirement S1-7: Gender Ratio by Title...........................7",
+    f"ESRS Disclosure Requirement S1-7: Gender Ratio by Department...........8",
+    f"ESRS Disclosure requirement S1-16: Gender Pay Gap..................................9",
+    f"ESRS Disclosure requirement S1-16: Gender Pay Gap by Title..................10",
+    f"ESRS Disclosure requirement S1-16: Gender Pay Gap by Department...11",
+    f"ESRS Disclosure requirement S1-16: Gender Pay Gap over Time............12",
+    f"Number of Employees Over Time...................................................................13",
+    f"ESRS S1-7: Gender Workforce Composition Over Time............................14",
+    f"Workforce Composition by Department Over Time..................................15",
+    f"Salary Progression by Gender..........................................................................16",
+    f"Average Starting Salary by Gender Over Time...........................................17"
+]
+
+create_slide_index(prs, "Index of Content", content=content)
 
 # 1. Overview of HR-relevant data
 # 1.a. Fetching & processing data
@@ -261,7 +311,7 @@ plt.close()
 
 # 2.c. Department - Generate slides
 # Slide 3: Line Plot
-create_slide(prs, "Number of Employees and Average Salary by Department",
+create_slide(prs, "Number of Employees and Average Salary (USD, K) by Department",
              img_path=(f'{output_dir}\\num_emp_sal_per_dept.png'))
 
 
@@ -377,13 +427,13 @@ plt.tight_layout()
 plt.savefig(f'{output_dir}/combined_gender_distribution.png')
 plt.close()
 
-create_slide(prs, "ESRS Disclosure requirement S1-7: Gender ratio across workforce", img_path=f'{output_dir}\\combined_gender_distribution.png')
+create_slide(prs, "ESRS Disclosure requirement S1-7: Gender Ratio across Workforce", img_path=f'{output_dir}\\combined_gender_distribution.png')
 
 # Group by title and gender to get the counts
 title_gender_counts = curr_df.groupby(['title', 'gender']).size().unstack(fill_value=0)
 
 # Plot the column chart
-title_gender_counts.plot(kind='bar', figsize=(14, 7), color=['#66b3ff', '#ff9999'])
+title_gender_counts.plot(kind='bar', figsize=(14, 7), color=['#ff9999', '#66b3ff'])
 
 # Adding labels and title
 plt.xlabel('Job Title')
@@ -399,13 +449,13 @@ plt.tight_layout()
 plt.savefig(f'{output_dir}/gender_ratio_by_title.png')
 plt.close()
 
-create_slide(prs, "Gender ratio by title", img_path=f'{output_dir}\\gender_ratio_by_title.png')
+create_slide(prs, "ESRS Disclosure requirement S1-7: Gender Ratio by Title", img_path=f'{output_dir}\\gender_ratio_by_title.png')
 
 # Group by department name and gender to get the counts
 dept_gender_counts = curr_df.groupby(['dept_name', 'gender']).size().unstack(fill_value=0)
 
 # Plot the column chart
-dept_gender_counts.plot(kind='bar', figsize=(14, 7), color=['#66b3ff', '#ff9999'])
+dept_gender_counts.plot(kind='bar', figsize=(14, 7), color=['#ff9999', '#66b3ff'])
 
 # Adding labels and title
 plt.xlabel('Department Name')
@@ -421,7 +471,7 @@ plt.tight_layout()
 plt.savefig(f'{output_dir}/gender_ratio_by_dept.png')
 plt.close()
 
-create_slide(prs, "Gender ratio by department", img_path=f'{output_dir}\\gender_ratio_by_dept.png')
+create_slide(prs, "ESRS Disclosure Requirement S1-7: Gender Ratio by Department", img_path=f'{output_dir}\\gender_ratio_by_dept.png')
 
 # Disclosure requirement S1-16 – Pay gap between women and men
 # The undertaking shall disclose the following information:
@@ -601,19 +651,19 @@ plt.close()
 
 # 3.d. Generate slides
 # Slide 3: The Gender Pay Gap
-create_slide(prs, "ESRS Disclosure requirement S1-16: The Gender Pay Gap",
+create_slide(prs, "ESRS Disclosure requirement S1-16: Gender Pay Gap",
              content=content)
 
 # Slide 3: The Gender Pay Gap by Title
-create_slide(prs, "The Gender Pay Gap by Title",
+create_slide(prs, "ESRS Disclosure requirement S1-16: Gender Pay Gap by Title",
              img_path=f'{output_dir}\\gender_paygap_by_title.png')
 
 # Slide 3: Net Evolution per Department
-create_slide(prs, "The Gender Pay Gap by Department",
+create_slide(prs, "ESRS Disclosure requirement S1-16: Gender Pay Gap by Department",
              img_path=f'{output_dir}\\gender_paygap_by_dept.png')
 
 # Slide 3: The Gender Pay Gap over time
-create_slide(prs, "The Gender Pay Gap over time",
+create_slide(prs, "ESRS Disclosure requirement S1-16: Gender Pay Gap (Annualized Average) over Time",
              img_path=f'{output_dir}\\gender_paygap_over_time.png')
 
 # 4. Employees df
@@ -725,11 +775,11 @@ plt.close()
 
 # 4.d. Generate slides
 # Slide 2: Line Plot
-create_slide(prs, "Change in Number of Employees Over Time",
+create_slide(prs, "Number of Employees Over Time",
              img_path=f'{output_dir}\\num_employees_over_time.png')
 
 # Slide 3: Average Hired Each Month
-create_slide(prs, "Change in Number of Female and Male Employees Over Time",
+create_slide(prs, "ESRS S1-7: Gender Workforce Composition Over Time",
              img_path=f'{output_dir}\\num_employees_per_gender_over_time.png')
 
 # 5- Department employees df
@@ -810,7 +860,7 @@ for dept in departments:
 
 plt.xlabel('Date')
 plt.ylabel('Number of Employees')
-plt.title('Temporal Evolution of Total Number of Employees by Department')
+plt.title('Evolution of Total Number of Employees by Department')
 plt.legend()
 plt.grid(True)
 plt.savefig(f'{output_dir}/num_employees_per_department_over_time.png')
@@ -818,7 +868,7 @@ plt.close()
 
 # 4.d. Generate slides
 # Slide 3: Net Evolution per Department
-create_slide(prs, "Net Evolution of Employees per Department",
+create_slide(prs, "Workforce Composition by Department Over Time",
              img_path=f'{output_dir}\\num_employees_per_department_over_time.png')
 
 # 5. Salaries df
@@ -966,11 +1016,11 @@ plt.close() # Closing the plot
 
 # 5.d. Generate slides
 # Slide 4: Salary Progression by Gender
-create_slide(prs, "Salary Progression by Gender",
+create_slide(prs, "Salary Progression by Gender (Average Across the Company Lifetime)",
              img_path=f'{output_dir}\\sal_prog_by_gender_over_time.png')
 
 # Slide 5: Starting Salary Evolution by Gender
-create_slide(prs, "Starting Salary Evolution by Gender",
+create_slide(prs, "Average Starting Salary by Gender Over Time",
              img_path=f'{output_dir}\\start_sal_by_gender_over_time.png')
 
 # Save the presentation
