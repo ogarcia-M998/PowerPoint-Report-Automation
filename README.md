@@ -1,4 +1,4 @@
-# PowerPointReportAutomation
+# PowerPoint Report Automation
 Here you can find an automated reporting tool for HR functions that complies with Mandatory Disclosures S1-7 and S1-16 of the European Sustainability Reporting Standards. 
 Using the mock SQL Employees Sample Database (available at https://dev.mysql.com/doc/employee/en/) on the employees of a software company, the Python script fetches the 
 relevant data, analyses it and passes the results into a PowerPoint presentation. The script can be set to run periodically (i.e. every two months) via a scheduling tool 
