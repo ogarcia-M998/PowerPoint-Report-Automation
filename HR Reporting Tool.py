@@ -33,9 +33,9 @@ from pandas.tseries.offsets import DateOffset
 # 0.b. Prepare sql connection
 # Database connection
 db_config = {
-    'user': 'root',
-    'password': '250598',
-    'host': 'localhost',
+    'user': 'root', # User is´n a personal computer will normally be root
+    'password': 'XXXXXX', # Insert your own password
+    'host': 'localhost', # Select your local host
     'database': 'employees',
     'charset': 'utf8mb4',
     'collation': 'utf8mb4_general_ci'
@@ -46,7 +46,7 @@ cnx = mysql.connector.connect(**db_config)
 cursor = cnx.cursor()
 
 # 0.c. Set up output directory for plots and slides
-# Directory to save the plots
+# Directory to save output
 output_dir = r'C:\Users\oscar\Documents\Projects\Report Automation Project\PythonOutput'
 
 # Ensure the directory exists
@@ -62,8 +62,8 @@ prs = Presentation()
 
 # Function to set the footer for each slide
 def set_footer(slide, slide_number):
-    left_text = "CONFIDENTIAL - Do not distribute"
-    right_text = datetime.now().strftime("%B %d, 2024")
+    left_text = "CONFIDENTIAL - Do not distribute" # Reference confidentiality in left footer 
+    right_text = datetime.now().strftime("%B %d, 2024") # Include current day into right footer
 
     # Add left text box
     left_box = slide.shapes.add_textbox(Inches(0.5), Inches(7), Inches(5), Inches(0.5))
@@ -77,7 +77,7 @@ def set_footer(slide, slide_number):
     # Add right text box
     right_box = slide.shapes.add_textbox(Inches(8), Inches(7), Inches(2), Inches(0.5))
     right_frame = right_box.text_frame
-    right_frame.text = f"{right_text} - Pg. {slide_number}"
+    right_frame.text = f"{right_text} - Pg. {slide_number}"  # Include slide number into right footer
     for paragraph in right_frame.paragraphs:
         paragraph.font.size = Pt(10)
         paragraph.font.name = 'Segoe UI Light'
@@ -96,10 +96,10 @@ def set_background(slide, color=RGBColor(255, 255, 255), img_path=None):  # Ligh
         fill.fore_color.rgb = color
     else:
         left = top = Inches(0)
-        img_path = img_path
-        pic = slide.shapes.add_picture(img_path, left, top, width=prs.slide_width, height=prs.slide_height)
+        img_path = img_path # Insert image for background
+        pic = slide.shapes.add_picture(img_path, left, top, width=prs.slide_width, height=prs.slide_height) # Adjust the image to the limits of the slide
 
-        # This moves it to the background
+        # Move the inserted image to the background
         slide.shapes._spTree.remove(pic._element)
         slide.shapes._spTree.insert(2, pic._element)
 
@@ -111,7 +111,7 @@ def create_slide(prs, title_text, content=None, img_path=None):
     title = slide.shapes.title
     title.text = title_text
 
-    # Set title font to Georgia, size to 24, and align left
+    # Set title font to Segoe, size to 24, and align left
     title_frame = title.text_frame
     title_paragraph = title_frame.paragraphs[0]
     title_paragraph.font.name = 'Segoe UI Semibold'
@@ -153,7 +153,7 @@ subtitle = slide.placeholders[1]
 title.text = "Employees Report"
 subtitle.text = "Automated Report Generated with Python"
 
-# Set title and subtitle font to Georgia
+# Set title and subtitle font to Segoe
 title.text_frame.paragraphs[0].font.name = 'Segoe UI Semibold'
 title.text_frame.paragraphs[0].font.color.rgb = RGBColor(23, 55, 94)
 subtitle.text_frame.paragraphs[0].font.name = 'Segoe UI Light'
@@ -163,14 +163,14 @@ set_background(slide,
                img_path='C:/Users/oscar/Documents/Projects/Report Automation Project/Supporting materials/slide_background2.jpg')  # Light grey background
 
 # 0.f. Slide 2: Index
-# Create slides with desired content
+# Define special create_slide function for the generation of the Index of Content 
 def create_slide_index(prs, title_text, content=None):
     slide_layout = prs.slide_layouts[5]
     slide = prs.slides.add_slide(slide_layout)
     title = slide.shapes.title
     title.text = title_text
 
-    # Set title font to Georgia, size to 24, and align left
+    # Set title font to Segoe, size to 24, and align left
     title_frame = title.text_frame
     title_paragraph = title_frame.paragraphs[0]
     title_paragraph.font.name = 'Segoe UI Semibold'
