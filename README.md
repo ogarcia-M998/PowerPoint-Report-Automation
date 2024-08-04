@@ -78,9 +78,6 @@ To run the script, execute the following command in your terminal:
 python HR_Reporting_Tool.py
 ```
 
-## Example
-An example usage scenario would include running the script periodically (e.g., weekly or monthly) via Windows Task Scheduler to generate updated HR reports automatically.
-
 ## License
 MIT License
 
