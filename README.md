@@ -1,6 +1,6 @@
 # HR Reporting Tool
 ## Overview
-The HR Reporting Tool is designed to automate the creation of a periodic PowerPoint report based on data from an SQL relational database named 'Employees'. The script extracts data, performs analysis, and generates visualizations, which are then compiled into a PowerPoint presentation. The script can be set to run periodically (i.e. every two months) via a scheduling tool 
+The HR Reporting Tool is designed to automate the creation of a periodic PowerPoint report based on data from a mock SQL relational database named 'Employees' (available under https://dev.mysql.com/doc/employee/en/). The script extracts data, performs analysis, and generates visualizations, which are then compiled into a PowerPoint presentation. The script can be set to run periodically (i.e. every two months) via a scheduling tool 
 like Windows Task Scheduler, and can be adjusted to respond to a different database structure or to report alternative metrics relevant to the company. 
 
 In this instance, it recovers some basic aspects like current number of employees, average and total salary mass, distribution of employees and average salary across 
